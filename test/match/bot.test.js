@@ -104,7 +104,7 @@ test('rehearsal: candidate layouts are simulated without side effects; the chose
   assert.equal(m.errorCount, 0);
   checkInvariants(m);
   // the whole match still runs deterministically with rehearsal on
-  const run = () => { const x = soloBot({ seed: 11, botRehearsal: 3, difficulty: 'FUNNY' }).start(); return JSON.stringify({ ...x.runToEnd(), durationMs: 0 }); };
+  const run = () => { const x = soloBot({ seed: 11, botRehearsal: 3, difficulty: 'FUNNY' }).start(); return JSON.stringify({ ...x.runToEnd(), durationMs: 0, resultId: null }); };
   assert.equal(run(), run());
   m.dispose();
 });
@@ -127,7 +127,7 @@ test('rehearsal runs in bounded slices between scheduler callbacks and plays exa
     const end = h.runToEnd();
     assert.equal(m.errorCount, 0);
     m.dispose();
-    return { result: JSON.stringify({ ...end, durationMs: 0 }), perCallback };
+    return { result: JSON.stringify({ ...end, durationMs: 0, resultId: null }), perCallback };
   };
   const whole = run(undefined);
   const sliced = run(1e-6);
