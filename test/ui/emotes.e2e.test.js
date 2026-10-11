@@ -319,6 +319,46 @@ describe('official emotes in the browser', { skip: !ENABLED && 'set SP_E2E=1 (an
     await page.close();
   });
 
+  for (const count of [5, 6]) for (const [w, h] of [[1920, 1080], [844, 390]]) {
+    test(`${count}-player scrolling team: sent bubbles remain inside the viewport at ${w}×${h}`, async () => {
+      const { page, problems } = await open('/dev/game-mock.html?shot=1&render=fallback&phase=PREP', { w, h });
+      await page.waitForFunction(() => !!globalThis.__MOCK__ && !!document.querySelector('.team__row'));
+      await page.evaluate((count) => {
+        const { store } = globalThis.__MOCK__;
+        const pub = store.get().match.public;
+        const players = [...pub.players];
+        while (players.length < count) players.push({ ...players[0], playerId: `extra_${players.length}`, seat: players.length, name: `玩家${players.length + 1}`, fieldId: null });
+        store.patch('match', { public: { ...pub, players } });
+      }, count);
+      await page.waitForSelector('.team--scroll');
+      await page.click('.ewheel__btn');
+      await page.waitForSelector('.ewheel__item');
+      await page.click('.ewheel__item');
+      await page.waitForSelector('.team__row.is-self .team__bubble');
+      await sleep(300);
+      const inside = () => page.evaluate(() => {
+        const team = document.querySelector('.team--scroll');
+        const bounds = team.getBoundingClientRect();
+        const bubble = team.querySelector('.team__bubble').getBoundingClientRect();
+        return bubble.left >= bounds.left && bubble.right <= bounds.left + team.clientWidth + 1 && bubble.top >= bounds.top - 1 && bubble.bottom <= bounds.bottom + 1;
+      });
+      assert.equal(await inside(), true, 'own sent bubble is not clipped');
+      await page.evaluate(() => {
+        const team = document.querySelector('.team--scroll');
+        team.scrollTop = team.scrollHeight;
+        const { store } = globalThis.__MOCK__;
+        const players = store.get().match.public.players;
+        const now = Date.now();
+        store.set({ emotes: [{ seq: now, playerId: players.at(-1).playerId, id: 'autochess_battle_happy', at: now }] });
+      });
+      await page.waitForSelector('.team__row:last-child .team__bubble');
+      await sleep(300);
+      assert.equal(await inside(), true, 'last seat bubble is visible after scrolling');
+      assert.deepEqual(problems, []);
+      await page.close();
+    });
+  }
+
   test('in-match mock: bubbles beside the senders\' avatars, wheel above 交流', { skip: !HAS_ART && 'no official emote art (neither the local extraction nor the fetched copies)' }, async () => {
     const { page, problems } = await open('/dev/game-mock.html?shot=1&render=fallback&phase=PREP&variant=emote', { w: 1920, h: 1080 });
     await page.waitForFunction(() => !!document.querySelector('.screen:not(.gload)'), { timeout: 15000 });

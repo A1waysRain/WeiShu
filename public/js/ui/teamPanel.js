@@ -123,7 +123,7 @@ export function TeamPanel({ pub, myId, watching, bubbles, onWatch, compact = fal
           ${back ? html`<button type="button" class="btn btn--secondary btn--sm team__back"
             onClick=${() => observe.onBack()}><span class="btn__label">返回战场</span></button>` : null}
         </div>
-        ${bubble ? html`<${EmoteBubble} key=${bubble.seq} id=${bubble.id} class="team__bubble" />` : null}
+        ${bubble ? html`<${EmoteBubble} key=${bubble.seq} id=${bubble.id} at=${bubble.at} class="team__bubble" />` : null}
       </div>`;
     })}
   </aside>`;

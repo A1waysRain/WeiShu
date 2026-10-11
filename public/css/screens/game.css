@@ -281,7 +281,8 @@
 .team { position: absolute; left: .22rem; top: 2.36rem; display: flex; flex-direction: column; gap: .14rem; pointer-events: none; }
 .team__row { position: relative; display: flex; align-items: center; gap: .1rem; pointer-events: auto; }
 .team--scroll { max-height: min(3.82rem, calc(100% - 3.5rem)); overflow-y: auto; overflow-x: hidden; pointer-events: auto; touch-action: pan-y; overscroll-behavior: contain; padding: .1rem .12rem; }
-.team--scroll .team__row { flex: 0 0 auto; min-height: .8rem; }
+/* Bubbles sit outside their row. Reserve their width inside the scroll viewport so overflow-x does not clip them. */
+.team--scroll .team__row { flex: 0 0 auto; min-height: .8rem; margin-right: 1.2rem; }
 .team__btn {
   position: relative; padding: 0; background: none; border: 0;
   transition: transform var(--t-fast);
