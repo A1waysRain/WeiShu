@@ -228,7 +228,7 @@ test('#16 古米 备用军粮 with an enemy blocked: the cast turns her next att
   done(h);
 });
 
-test('#16 塞雷娅 S1 急救 (audit): checked at her attack — an ally of her area at ≤ half HP turns that attack into the heal; healed back meanwhile ⇒ she just attacks', () => {
+test('#16 塞雷娅 S1: the skill range starts a pending heal before her attack; a recovered ally withdraws it', () => {
   // PRTS 备注 "此技能仅在周围有符合血量条件的友方单位时可触发，触发时会替换当次攻击"; text corrected to "血量小于等于一半"
   const id = 'chess_char_5_11_a';
   const s = skillOf(id, 'skchr_demkni_1');
@@ -259,21 +259,27 @@ test('#16 塞雷娅 S1 急救 (audit): checked at her attack — an ally of her 
   m.hp = 5000;
   const hits0 = hits();
   assert.ok(h.runUntil(() => u.skill.activations === 1, 2));
+  assert.ok(u.skill.pending, 'range condition starts the skill before the attack cooldown expires');
+  assert.ok(h.runUntil(() => h.hooksOf('heal').some((c) => c.source === u && c.target === m), 2));
   assert.equal(starts(h, u)[0].reason, 'DEFAULT');
   const heal = h.hooksOf('heal').find((c) => c.source === u && c.target === m);
   assert.ok(heal, 'healed at once, in place of that attack');
   approx(heal.amount, u.s.atk * s.bb.heal_scale);
   assert.equal(hits(), hits0, 'that attack hit nobody');
   assert.ok(!u.skill.pending);
-  // dropped to 40 %, healed back to 80 % before her attack: no cast, she keeps attacking (no heal mode left waiting)
+  // Range starts another pending heal; recovery before the attack withdraws it and refunds the charge.
   fill(u);
+  u.skill.opReadyAt = h.b.time;
   u.atkCd = 1;
   m.hp = 4000;
   h.run(0.5);
+  assert.equal(u.skill.activations, 2, 'the skill starts without waiting for the attack');
+  assert.ok(u.skill.pending);
   m.hp = 8000;
   const hits1 = hits();
   h.run(4);
-  assert.equal(u.skill.activations, 1, 'no second cast');
+  assert.equal(u.skill.activations, 2, 'no extra cast after recovery');
+  assert.ok(!u.skill.pending && u.skill.ready, 'withdrawn and charge refunded');
   assert.ok(hits() >= hits1 + 3, `she kept hitting the enemy (${hits() - hits1} hits in 4 s)`);
   // the engine's safety net: a cast whose ally condition fails before the attack is withdrawn, its charge returned
   m.hp = 4000;

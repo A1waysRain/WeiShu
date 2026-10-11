@@ -1073,10 +1073,11 @@ test('2_16 拉普兰德: 狼魂 arts on one extra target without the ranged ×0.
   approx(first.amount, u.s.atk * tb.atk_scale, 'ranged ×0.8');
   assert.equal(statuses(h, 'silence', (c) => c.source === u)[0].duration, t.duration);
   h.runUntil(() => u.skill.active, 60);
-  h.run(2);
+  assert.ok(h.runUntil(() => dealt(h, u, (c) => c.dmg.isSkill).length >= 2, 10), 'skill attacks land');
   approx(u.s.atk, u.base.atk * (1 + bb.atk));
   const s0 = h.hooksOf('skillStart').find((c) => c.unit === u).t;
-  const sk = dealt(h, u, (c) => c.t > s0 + 0.05);
+  // A normal projectile fired before activation can land after it; inspect skill damage rather than wall time.
+  const sk = dealt(h, u, (c) => c.t > s0 + 0.05 && c.dmg.isSkill);
   assert.ok(sk.length >= 2 && sk.every((c) => c.type === 'arts'));
   for (const c of sk) approx(c.amount, u.s.atk, 'no ranged reduction');
   assert.ok(h.hooksOf('attack').filter((c) => c.attacker === u && c.t > s0).some((c) => c.targets.length === 2));
@@ -1132,11 +1133,11 @@ test('2_18 灰毫: 炮术研习 ATK +atk (ground surroundings: ashlok_t_1.atk); 
   const inner = h.unit(id), edge = h.unit('chess_char_2_18_b');
   approx(inner.s.atk, inner.base.atk * (1 + t['ashlok_t_1.atk']), 'all four neighbours are ground');
   approx(edge.s.atk, edge.base.atk * (1 + tal('chess_char_2_18_b').atk), 'a high tile next to it');
-  const h2 = run({ defs: { enemies: { e: dummy('e', { atk: 400 }) } }, units: [{ chessId: id, row: 10, col: 5, carryState: READY }], enemies: [{ key: 'e', pos: [10, 5] }] });
+  const h2 = run({ defs: { enemies: { e: dummy('e', { atk: 400 }) } }, units: [{ chessId: id, row: 10, col: 5, carryState: READY }], enemies: [{ key: 'e', pos: [10, 8] }] });
   const u = h2.unit(id);
   h2.runUntil(() => u.skill.active, 5);
   // the owner's deliberate deviation from the 重装 TAKE_DAMAGE row: the basic strategy, no hit needed — she casts before the
-  // enemy she holds has hit her
+  // enemy inside the skill range has hit her (an enemy on her own tile is outside the artillery skill range)
   assert.equal(u.skill.rule, 'DEFAULT');
   assert.equal(h2.hooksOf('skillStart').find((c) => c.unit === u).reason, 'DEFAULT');
   assert.ok(!h2.hooksOf('damaged').some((c) => c.target === u), 'not hit before the cast');

@@ -1027,7 +1027,7 @@ const KITS = {
           battle.on('tick', () => {
             const sk = unit.skill;
             if (!alive(unit) || !unit.canAct || !sk || !sk.ready || sk.opCooling || unit.s.flags.silence || (unit.trait.ammo ?? 1) > 0) return;
-            if (battle.enemiesInKeys(unit.baseRangeKeys || unit.rangeKeys, unit, unit.profile).length) sk.activate('DEFAULT');
+            if (battle.enemiesInKeys(sk.skillRangeKeys(), unit, unit.profile).length) sk.activate('DEFAULT');
           }, { owner: unit });
         }
         if (extra > 0) {

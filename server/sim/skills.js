@@ -6,8 +6,8 @@
 // its time SP keeps recovering (PRTS: only 阻回 pauses the SP cooldown; 晕眩 does not — community report #18).
 // Charges (maxCharges > 1): SP fills to spCost → +1 charge (SP restarts) until charges == max (SP stays full).
 // Trigger rules (the official 技能策略, PRTS 卫戍协议/帮助 §作战阶段 技能操作; data: tools/build-data.mjs resolveTrigger):
-//   DEFAULT — the basic strategy: ready + about to attack/heal + enemy / injured ally in the INITIAL range (or blocked by
-//   a melee unit) — or, checked every tick, an enemy inside one of the content trigger ranges added with
+//   DEFAULT — ready + enemy / injured ally in the selected skill's effective range. Skills with their own range
+//   check every tick without waiting for a normal attack; an enemy inside content trigger ranges added with
 //   addTriggerRange: 海嗣, 流形;
 //   SKILL_RANGE — a MANUAL skill with a 技能范围 of its own: "不通过普通攻击/治疗触发技能，仅在技能范围内存在敌人（无视其
 //   不可选中）时释放技能": any living enemy on the trigger grid (the skill range; stealthed / untargetable / flying ones
@@ -15,7 +15,7 @@
 //   injured ally of the grid whose HP ratio is at most that instead (an AUTO heal skill's own rule — 古米 S1 waits in
 //   its heal mode until it has healed);
 //   TAKE_DAMAGE (ready + just took a hit: 重装 "不受技能范围影响，受到伤害时释放技能"), SP_FULL/ALWAYS (as soon as ready),
-//   CUSTOM_RANGE (enemy inside the custom trigger grid), SEARCH (an enemy inside the INITIAL range, checked every tick
+//   CUSTOM_RANGE (enemy inside the skill/custom grid), SEARCH (an enemy inside the skill range, checked every tick
 //   without waiting for an attack: "不受基础策略影响，在初始攻击范围内存在敌人时释放技能" — not any enemy on the field,
 //   which burnt the skill on enemies that had just spawned), GDGLOW_SKILL_2 ("全场存在可选目标时释放技能": a targetable
 //   enemy anywhere on the field — for a heal skill an ally that needs healing — every tick), NEVER/MANUAL (never
@@ -310,12 +310,8 @@ export class SkillRuntime {
     if (TICK_RULES.has(this.rule)) {
       if (this._tickRuleSatisfied()) this.activate(this.rule);
     } else if (this.rule !== 'TAKE_DAMAGE' && this.rule !== 'NEVER') {
-      // DEFAULT (and unknown rules) for units that cannot attack right now: check the initial range every tick;
-      // content trigger ranges are checked every tick for everyone (nothing may be in the unit's own range)
-      const prof = u.profile;
-      if (prof && (prof.noAttack || (prof.noAttackUnlessSkill && !this.active))) {
-        if (this._defaultCondition()) this.activate('DEFAULT');
-      } else if (this.triggerRanges.length && !this.healSkill && this._extraTriggerSatisfied()) this.activate('DEFAULT');
+      // DEFAULT (including unknown rules): range is checked every tick, regardless of the normal attack cooldown.
+      if (this._defaultCondition() && (!this.triggerAllies || this._allyTriggerSatisfied())) this.activate('DEFAULT');
     }
   }
 
@@ -325,25 +321,35 @@ export class SkillRuntime {
   /** Public form of the operation cooldown, for kits with their own automatic cast of a MANUAL skill. */
   get opCooling() { return this._opCooling(); }
 
+  /** Range used by the selected skill, even before activation applies its targeting override. */
+  skillRangeKeys() {
+    const u = this.unit;
+    const tg = this.spec.targeting;
+    const grid = tg?.rangeGrid ?? this.def.rangeGrid ?? this.triggerGrid ?? u.rangeGrid ?? [[0, 0]];
+    const ext = (tg?.noRangeExtend ? 0 : u.s.rangeExtend) + (tg?.rangeExtend || 0);
+    return absoluteRangeKeys(grid, u.tileR, u.tileC, u.dir, ext);
+  }
+
   /** Absolute tile keys of the trigger grid at the unit's current tile and direction (cached, with their Set). */
   _triggerKeys() {
     const u = this.unit;
     const tile = u.tileR * COLS + u.tileC;
-    if (!this._trigKeys || this._trigTile !== tile || this._trigDir !== u.dir) {
-      this._trigKeys = absoluteRangeKeys(this.triggerGrid, u.tileR, u.tileC, u.dir, 0);
+    const extend = this.unit.s.rangeExtend;
+    if (!this._trigKeys || this._trigTile !== tile || this._trigDir !== u.dir || this._trigExtend !== extend) {
+      this._trigKeys = this.skillRangeKeys();
       this._trigSet = new Set(this._trigKeys);
       this._trigTile = tile;
       this._trigDir = u.dir;
+      this._trigExtend = extend;
     }
     return this._trigKeys;
   }
 
-  /** `trigger.allies`: an injured, healable ally on the trigger grid (the unit's own range without one) ≤ hpAtMost. */
+  /** `trigger.allies`: an injured, healable ally in the selected skill range ≤ hpAtMost. */
   _allyTriggerSatisfied() {
     const b = this.battle;
     const u = this.unit;
-    let keys;
-    if (this.triggerGrid) { this._triggerKeys(); keys = this._trigSet; } else keys = u.baseRangeKeys || u.rangeKeys;
+    const keys = new Set(this.skillRangeKeys());
     const lim = this.triggerHpAtMost + 1e-9;
     return b.injuredAlliesInKeys(keys, u).some((a) => a.hpRatio <= lim);
   }
@@ -352,10 +358,12 @@ export class SkillRuntime {
     const b = this.battle;
     const u = this.unit;
     if (this.rule === 'SP_FULL') return true;
-    // SEARCH: an enemy inside the initial attack range, every tick (librators / phalanxes and 安洁莉娜 do not attack
+    // SEARCH: an enemy inside the skill range, every tick (librators / phalanxes and 安洁莉娜 do not attack
     // while the skill is off, so DEFAULT's "about to attack" never comes)
     if (this.rule === 'SEARCH') return this._defaultCondition();
     if (this.rule === 'CUSTOM_RANGE') {
+      // Kits use an explicitly empty custom grid to reserve casting for their own special conditions.
+      if (this.triggerGrid?.length === 0) return false;
       if (!this.triggerGrid) return this._defaultCondition();
       return b.enemiesInKeys(this._triggerKeys(), u, { canHitFly: true }).length > 0;
     }
@@ -373,21 +381,18 @@ export class SkillRuntime {
   }
 
   /**
-   * DEFAULT rule condition: an enemy (or injured ally for heal skills) inside the initial range (baseRangeKeys: own
-   * grid + permanent rangeExtend), or an enemy inside a content trigger range (addTriggerRange; not for heal skills).
+   * DEFAULT: an enemy (or injured ally for heal skills) inside the skill range, including range extension,
+   * or an enemy inside a content trigger range (addTriggerRange; not for heal skills).
    */
   _defaultCondition() {
     const b = this.battle;
     const u = this.unit;
     if (b.rangeChanged(u)) b._refreshRange(u);
-    const keys = u.baseRangeKeys || u.rangeKeys;
+    const keys = this.skillRangeKeys();
     if (keys) {
       if (this.healSkill) return b.injuredAlliesInKeys(keys, u).length > 0;
       if (b.enemiesInKeys(keys, u, u.profile).length > 0) return true;
     }
-    // the enemies a unit blocks are always its targets (Battle.blockedTargets), in range or not — PRTS 卫戍协议/帮助
-    // "敌人被近战干员自身阻挡" satisfies the target condition of the basic strategy (a ranged blocker too: user playtest #6)
-    if (!this.healSkill && u.blocking.length && b.blockedTargets(u, u.profile).length > 0) return true;
     return !this.healSkill && this.triggerRanges.length > 0 && this._extraTriggerSatisfied();
   }
 

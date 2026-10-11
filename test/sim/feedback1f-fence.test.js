@@ -58,8 +58,10 @@ function watch(stageId, chessId, r, c, dir, { template = 'act1autochess_02', sec
     const target = h.b.enemies.some((e) => e.alive && e.deployed && canTargetEnemy(u, e, prof) && bodyInKeys(e, set));
     if (!target) { waitFrom = null; continue; }
     inRange++;
-    if (waitFrom == null) waitFrom = h.b.time;
-    worst = Math.max(worst, h.b.time - waitFrom - u.s.interval);
+    // Skills now start during an existing attack cooldown. A new attack-speed buff does not retroactively shorten
+    // that cooldown; measure against the deadline recorded when a target first becomes available.
+    if (waitFrom == null) waitFrom = h.b.time + Math.max(u.atkCd, u.s.interval);
+    worst = Math.max(worst, h.b.time - waitFrom);
   }
   return { attacks, inRange, blocked, worst };
 }

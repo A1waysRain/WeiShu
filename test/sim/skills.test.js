@@ -9,9 +9,106 @@ const approx = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) <= eps, `${a} ≈
 const RANGE3 = [[0, 0], [0, 1], [0, 2], [0, 3], [1, 0], [1, 1], [1, 2], [1, 3], [-1, 0], [-1, 1], [-1, 2], [-1, 3]];
 const dummy = (o = {}) => enemyRec({ key: 'enemy_dummy', hp: 1e7, speed: 0, ...o });
 
+for (const rule of ['DEFAULT', 'SEARCH', 'CUSTOM_RANGE', 'SKILL_RANGE', 'UNKNOWN']) {
+  test(`${rule}: activation uses the selected skill range rather than the normal attack range`, () => {
+    for (const expanded of [true, false]) {
+      const h = makeBattle({
+        defs: {
+          chess: { t_range: chessRec({ id: 't_range', profession: 'SNIPER',
+            rangeGrid: expanded ? [[0, 0], [0, 1]] : [[0, 0], [0, 1], [0, 2], [0, 3]],
+            skill: { spCost: 1, initSp: 1, duration: 10,
+              rangeGrid: expanded ? [[0, 0], [0, 1], [0, 2], [0, 3]] : [[0, 0], [0, 1]],
+              trigger: { rule, customRangeGrid: [[0, 0], [0, 1]] } },
+          }) }, enemies: { enemy_dummy: dummy() },
+        },
+        units: [{ chessId: 't_range', row: 10, col: 4 }],
+        enemies: [{ key: 'enemy_dummy', pos: [10, 7] }], content: 'generic',
+      });
+      h.run(0.2);
+      assert.equal(h.unit('t_range').skill.activations, expanded ? 1 : 0,
+        expanded ? 'target only in skill range must start the skill without a normal attack' :
+          'target only in normal attack range must not start the skill');
+      if (!expanded) {
+        h.spawn('enemy_dummy', { pos: [10, 5] });
+        h.run(1.2);
+        assert.equal(h.unit('t_range').skill.activations, 1);
+      }
+    }
+  });
+}
+
+test('healing skills activate for an injured ally only inside the skill range', () => {
+  const h = makeBattle({
+    defs: { chess: {
+      t_heal: chessRec({ id: 't_heal', profession: 'MEDIC', rangeGrid: [[0, 0], [0, 1]],
+        skill: { spCost: 1, initSp: 1, duration: 10, rangeGrid: [[0, 0], [0, 2]] } }),
+      t_ally: chessRec({ id: 't_ally', skill: null }),
+    } },
+    units: [{ chessId: 't_heal', row: 10, col: 4 }, { chessId: 't_ally', row: 10, col: 5 },
+      { chessId: 't_ally', row: 10, col: 6, uid: 'skill_target' }], content: 'generic',
+  });
+  h.step();
+  const healer = h.unit('t_heal');
+  const allies = h.allies().filter((a) => a !== healer);
+  allies.find((a) => a.tileC === 5).hp /= 2;
+  h.run(0.1);
+  assert.equal(healer.skill.activations, 0, 'injury in normal range alone is insufficient');
+  allies.find((a) => a.tileC === 5).hp = allies.find((a) => a.tileC === 5).s.maxHp;
+  allies.find((a) => a.tileC === 6).hp /= 2;
+  h.run(0.1);
+  assert.equal(healer.skill.activations, 1, 'injury in skill range triggers without a normal heal');
+});
+
+test('an empty custom trigger still delegates to the kit despite a defined skill range', () => {
+  const h = makeBattle({
+    defs: { chess: { t_range: chessRec({ id: 't_range',
+      skill: { spCost: 1, initSp: 1, duration: 10, rangeGrid: [[0, 0], [0, 1]],
+        trigger: { rule: 'CUSTOM_RANGE', customRangeGrid: [] } },
+    }) }, enemies: { enemy_dummy: dummy() } },
+    units: [{ chessId: 't_range', row: 10, col: 4 }],
+    enemies: [{ key: 'enemy_dummy', pos: [10, 5] }], content: 'generic',
+  });
+  h.run(0.2);
+  assert.equal(h.unit('t_range').skill.activations, 0);
+});
+
+test('skill trigger range follows facing and range buffs, including noRangeExtend', () => {
+  const h = makeBattle({
+    defs: { chess: { t_range: chessRec({ id: 't_range',
+      skill: { spCost: 1, initSp: 1, duration: 10, rangeGrid: [[0, 1]], trigger: { rule: 'SKILL_RANGE' } },
+    }) } }, units: [{ chessId: 't_range', row: 10, col: 4 }], content: 'generic',
+  });
+  h.step();
+  const u = h.unit('t_range');
+  u.dir = 'UP';
+  assert.deepEqual(u.skill.skillRangeKeys(), [11 * 21 + 4]);
+  h.b.addBuff(u, { key: 'test:range', mods: { rangeExtend: 2 } });
+  assert.deepEqual(u.skill._triggerKeys(), [11 * 21 + 4, 12 * 21 + 4, 13 * 21 + 4]);
+  u.skill.spec.targeting.noRangeExtend = true;
+  assert.deepEqual(u.skill.skillRangeKeys(), [11 * 21 + 4]);
+});
+
 function sniperWith(skill, o = {}) {
   return chessRec({ id: 't_sn', profession: 'SNIPER', subProfessionId: 'closerange', stats: { atk: 100, bat: 1, ...(o.stats || {}) }, rangeGrid: RANGE3, skill, ...o });
 }
+
+test('DEFAULT starts in skill range even when normal attacks have a long cooldown', () => {
+  for (const expanded of [false, true]) {
+    const h = makeBattle({
+      defs: { chess: { t_sn: sniperWith({ spCost: 1, initSp: 1, duration: 10,
+        rangeGrid: expanded ? [[0, 0], [0, 4]] : RANGE3 }) }, enemies: { enemy_dummy: dummy() } },
+      units: [{ chessId: 't_sn', row: 10, col: 4 }], content: 'generic',
+    });
+    h.step();
+    const u = h.unit('t_sn');
+    u.atkCd = 10;
+    h.spawn('enemy_dummy', { pos: [10, expanded ? 8 : 6] });
+    h.step();
+    assert.equal(u.skill.activations, 1, 'range check casts immediately, whether or not normal attacks reach');
+    assert.equal(u.stats.attacks, 0, 'the cast does not depend on a normal attack');
+    assert.ok(u.atkCd > 9, 'normal attack cooldown has not elapsed');
+  }
+});
 
 test('SP: time regen, starts at initSp, capped at cost; DEFAULT waits for an enemy in the initial range', () => {
   const h = makeBattle({

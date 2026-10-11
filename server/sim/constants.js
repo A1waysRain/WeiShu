@@ -111,7 +111,7 @@ export const PALSY_MAX = 3;
  * ≥ 0 → all the way to the pull point (必定拉至身前), −1 → PULL_WEAK_SHARE of the starting distance, −2 → PULL_CRAWL
  * tiles, ≤ −3 → nothing. A pull "至面前" aims at the point PULL_ORIGIN tiles in front of the puller (拉力起点 "干员前方0.5格
  * 距离处") and stops once the target is within PULL_STOP_RADIUS of the puller's centre (急停 "拖拽者中心半径0.6708").
- * A directional push (推击手, 野鬃 S2 — the client buff template knockback[dir] —, 朝部署方向) on a target more than 45°
+ * A directional push (推击手, 朝部署方向) on a target more than 45°
  * off the direction or nearer than PUSH_DIRECTIONAL_MIN_DIST becomes radial with 受力等级 −2 (推与拉 "特殊修正";
  * knockback[dir] _decreaseForceLevelWhenNotInDirection 2).
  * PRTS 推与拉 gives two columns of 理想移动距离: 弹道 (a push carried by a projectile — "温蒂的23技能、阿消的12技能"; equal

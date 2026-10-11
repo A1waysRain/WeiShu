@@ -8,6 +8,7 @@ import { createRng } from '../../server/sim/rng.js';
 import { compactResult } from '../../server/sim/spec.js';
 import { MAX_SEATS, PHASE } from '../../shared/constants.js';
 import { validateC2S } from '../../shared/protocol.js';
+import { normalizeSp } from '../../public/js/ui/gameLogic.js';
 
 test('six players: pool capacity rounds up and boss HP grows above four players', () => {
   assert.equal(MAX_SEATS, 6);
@@ -42,6 +43,18 @@ test('six players: all bounty stages offer eight distinct cards and all players 
 test('battle result compaction preserves every player in a six-player field', () => {
   const perPlayer = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`p_${i}`, { total: 1, killed: 1, leaked: [] }]));
   assert.equal(Object.keys(compactResult({ perPlayer }).perPlayer).length, 6);
+});
+
+test('one human with five AI receives all eight supply choices through client normalization', () => {
+  const h = makeMatch({ humans: 1, bots: 5, fake: true });
+  // An unscheduled round uses the supply fallback, exercising the actual match wiring.
+  h.m.round = 2;
+  h.m.enterSpDraft();
+  const sp = h.m.publicView().sp;
+  assert.equal(sp.family, 'supply');
+  assert.equal(sp.cards.length, 8);
+  assert.equal(normalizeSp(sp).cards.length, 8);
+  h.m.dispose();
 });
 
 test('protocol accepts the sixth seat and eighth choice and rejects indexes beyond the limits', () => {

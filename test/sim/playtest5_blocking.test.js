@@ -168,7 +168,7 @@ test('#4: a blocker attacks the enemy it blocks even when it stands outside its 
   assert.ok(h.hooksOf('damaged').some((c) => c.source === u && c.target === x()), 'it hits its blocked enemy');
 });
 
-test('#4 (revised by the user after playtest #6): a ranged operator on a melee tile also hits and casts for the enemy it holds behind it', () => {
+test('#4: blockers still attack enemies behind them, but a target outside skill range does not trigger a skill', () => {
   // The playtest #5 QA had made blocked-first melee-only (PRTS 索敌的概念 "阻挡（近战限定）"); the user's rule after
   // playtest #6 — "阻挡了就一定要能打到": officially the collision pushes a blocked enemy to its blocker's front, so
   // whatever blocks an enemy can hit it. Facing LEFT, the range (9,6),(9,5) never holds the enemy blocked at x ≈ 6.71;
@@ -191,7 +191,7 @@ test('#4 (revised by the user after playtest #6): a ranged operator on a melee t
   for (const [id, profession] of [['t_rg', 'SNIPER'], ['t_ml', 'WARRIOR']]) {
     const r = run(id, profession);
     assert.ok(r.hits > 0, `${profession}: hits the enemy it blocks behind it`);
-    assert.equal(r.casts, 1, `${profession}: and casts its skill`);
+    assert.equal(r.casts, 0, `${profession}: the blocked enemy is outside skill range`);
     assert.ok(r.still, `${profession}: it still holds the enemy`);
   }
 });

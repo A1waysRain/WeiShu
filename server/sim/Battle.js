@@ -1719,8 +1719,8 @@ export class Battle {
    * Recompute a unit's absolute range tile keys: `rangeKeys` / `rangeKeySet` = current range (skill range override +
    * rangeExtend — the unit's own 攻击距离 unless the running skill's range ignores it, `targeting.noRangeExtend`: 信仰搅拌机
    * S3, PRTS 备注 "此技能的攻击范围不受'攻击距离'属性影响" — plus the skill's own `targeting.rangeExtend`) ∪
-   * `unit.extraRangeKeys` (content extra targets — setExtraRange); `baseRangeKeys` = the INITIAL range of the DEFAULT
-   * skill trigger: the unit's own grid + its permanent rangeExtend (`s.baseRangeExtend`: persistent, never-expiring
+   * `unit.extraRangeKeys` (content extra targets — setExtraRange); `baseRangeKeys` = the INITIAL attack range:
+   * the unit's own grid + its permanent rangeExtend (`s.baseRangeExtend`: persistent, never-expiring
    * buffs — talents, modules, bonds), no skill range, no temporary extend, no extra keys; `liveRangeGrid` = the
    * relative grid (facing RIGHT) of the 攻击范围 the detail card shows (shared/protocol.js unitStatsEntry `range`;
    * community report E1 after 0.1.0: the card kept the base grid while 烛煌 S3 attacked with 4-11): the grid behind
@@ -1969,7 +1969,7 @@ export class Battle {
    * a 中力 push moves a weight-1 enemy 1.7 tiles, a weight-2 one 0.44, weight 3 0.12, weight ≥ 4 not at all). Radial
    * (the default: away from `from`, the pusher's centre — "沿着干员向自身中心点的射线方向"; the client's buff template
    * knockback[relative]: 琳琅诗怀雅 S3, 山 S3, 莫斯提马 S3) or directional (`dir` = the pusher's direction {x, y}; template
-   * knockback[dir], Knockback {_useSourceDirection: true, _decreaseForceLevelWhenNotInDirection: 2}: 推击手, 野鬃 S2
+   * knockback[dir], Knockback {_useSourceDirection: true, _decreaseForceLevelWhenNotInDirection: 2}: 推击手
    * "往攻击方向"); a directional push on a target more than 45° off `dir` or nearer than 0.25 tile becomes radial with
    * 受力等级 −2 ("特殊修正"). `fixed` waives both corrections (圣聆初雪 S1 "朝部署方向": KnockBackWithCharacterDirection,
    * PRTS 备注 "不会因角度过大或距离过近而变化方向与力度"); `fixedAngle` only the angle one (PRTS 见行者 S2 备注 "不会因为角度过大

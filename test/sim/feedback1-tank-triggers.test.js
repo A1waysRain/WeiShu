@@ -18,7 +18,6 @@ import fs from 'node:fs';
 import { makeBattle, checkInvariants } from '../helpers/battleHarness.js';
 import { getDefaultSource } from '../../server/sim/simdata.js';
 import { bodyInKeys } from '../../server/sim/body.js';
-import { absoluteRangeKeys } from '../../server/sim/targeting.js';
 
 const CHESS = JSON.parse(fs.readFileSync(new URL('../../data/chess.json', import.meta.url), 'utf8'));
 const ds = getDefaultSource();
@@ -60,7 +59,7 @@ function firstCast(chessId, skillId, { spawnAt = 0, seconds = 40 } = {}) {
     out.reason = ctx.reason;
     const keys = new Set(u.baseRangeKeys || u.rangeKeys);
     out.enemyInRange = h.b.enemies.some((e) => e.alive && e.deployed && bodyInKeys(e, keys));
-    const sk = u.skill.triggerGrid ? new Set(absoluteRangeKeys(u.skill.triggerGrid, u.tileR, u.tileC, u.dir, 0)) : null;
+    const sk = new Set(u.skill.skillRangeKeys());
     out.enemyInSkillRange = !!sk && h.b.enemies.some((e) => e.alive && e.deployed && bodyInKeys(e, sk));
     out.blocking = u.blocking.length > 0;
   }, { priority: 1000 });
@@ -135,7 +134,7 @@ test('real battle: each deviated skill casts with an enemy in range before anyth
       assert.ok(r.cast != null, `never cast — ${where}`);
       assert.ok(r.cast >= 3, `no cast before an enemy is on the field — ${where}`);
       assert.equal(r.reason, 'DEFAULT', where);
-      assert.ok(r.enemyInRange, `an enemy on its initial range at the cast — ${where}`);
+      assert.ok(r.enemyInSkillRange, `an enemy on its selected skill range at the cast — ${where}`);
       assert.ok(r.hurt == null || r.hurt > r.cast, `cast before the first hit — ${where}`);
     }
   }
