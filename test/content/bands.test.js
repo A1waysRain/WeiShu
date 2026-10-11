@@ -169,6 +169,29 @@ test('杰西卡: after level 4, manual refresh 11 guarantees 魔王 once across 
   cover('band_jesica');
 });
 
+test('six repeated Jessica strategies keep refresh counters and guarantees independent', () => {
+  const perPlayer = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`p_${i}`, 'band_jesica']));
+  const { m } = setup({ mode: 'coop', humans: 6, bands: perPlayer });
+  for (const ps of m.players.values()) {
+    ps.shop.level = 4;
+    ps.shop.slots = [slotOf('chess_char_1_01_a')];
+  }
+  for (const ps of m.players.values()) {
+    for (let i = 0; i < 11; i++) m.dispatch(ps, 'onRefresh', {});
+    assert.equal(ps.counters['band:jesica:refreshes'], 11);
+    assert.equal(ps.counters['band:jesica:guaranteed'], 1);
+    assert.ok(ps.shop.slots.some(s => s?.id === 'chess_char_4_25_a'));
+    for (const next of m.players.values()) {
+      if (next.seat > ps.seat) {
+        assert.equal(next.counters['band:jesica:refreshes'], undefined);
+        assert.equal(next.counters['band:jesica:guaranteed'], undefined);
+        assert.ok(next.shop.slots.every(s => s?.id !== 'chess_char_4_25_a'));
+      }
+    }
+  }
+  m.dispose();
+});
+
 test('Jessica guarantee does not duplicate an existing 魔王 or affect other bands', () => {
   const { m, ps } = setup({ band: 'band_jesica' });
   ps.shop.level = 4;

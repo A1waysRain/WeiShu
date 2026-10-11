@@ -557,7 +557,7 @@ export class Match {
     const phase = this.phase;
     const d = this.draft;
     if (phase === PHASE.BAND_DRAFT && d && !d.picks[ps.playerId]) {
-      // the departed seat passes its turn with the default band (never one a teammate holds — defaultBand)
+      // The departed seat passes its turn with the shared default band.
       const turn = this.draftTurn() === ps.playerId;
       d.picks[ps.playerId] = this.defaultBand(ps.playerId);
       ps.bandId = d.picks[ps.playerId];
@@ -1255,7 +1255,7 @@ export class Match {
    * The strategy draft (user playtest #4 item 4): ONE countdown — every turn has the same clock, BAND_TURN_SECONDS, and
    * m.public.deadline is the current turn's end (= draft.turnDeadline; the step header and the turn indicator show the
    * same number). No separate step cap: the turns bound the step (≤ (seats + skips) × turn). AI seats pick at once. A
-   * turn that runs out takes the strategy the player has highlighted (g.bandFocus) while it is free, else the default
+   * turn that runs out takes the strategy the player has highlighted (g.bandFocus) while it is allowed, else the default
    * (timeoutBand). Solo, and any single-human match (soloUntimed): untimed. Solo also keeps seat order and has no skip.
    */
   enterBandDraft() {
@@ -1322,18 +1322,14 @@ export class Match {
       if (this.phase !== PHASE.BAND_DRAFT || token !== this._turnToken) return;
       const ps = this.players.get(this.draftTurn());
       if (!ps || !ps.botControlled) return;
-      // a strategy a teammate already took is not selectable (队友已选): the bot re-draws, else the first free one
-      let id = botPickBand(this, ps);
-      for (let k = 0; k < 8 && this.bandTaken(id, ps.playerId); k++) id = botPickBand(this, ps);
-      if (this.bandTaken(id, ps.playerId)) id = this.gd.bandIds().find((b) => !this.bandTaken(b, ps.playerId)) || id;
-      this._applyBand(ps, id, { dedupe: true });
+      // AI players may choose the same strategy as teammates.
+      const id = botPickBand(this, ps);
+      this._applyBand(ps, id);
     });
   }
 
   /**
-   * Whether `bandId` was already picked by another player of this draft. Research 09 §5 / DESIGN §14 corrections:
-   * the strategy draft marks a teammate's pick as 队友已选 and it cannot be chosen again (co-op). The automatic
-   * assignments — a turn that runs out and a departing seat — obey the same rule: see timeoutBand / defaultBand.
+   * Whether another player picked `bandId`. Informational only; strategies may be repeated.
    */
   bandTaken(bandId, playerId) {
     const picks = this.draft?.picks || {};
@@ -1342,28 +1338,21 @@ export class Match {
   }
 
   /**
-   * The strategy an automatic assignment gives `playerId` (a departing seat; a timed-out turn without a usable
-   * highlight, timeoutBand): the official default 「华法琳」 (bandDraft.timeoutBandId) while no teammate holds it, else the
-   * first strategy of the mode (sortId order, gd.bandIds) that nobody else picked — never a duplicate (队友已选; the
-   * client shows the same choice: public/js/screens/bandDraft.js timeoutBand). Solo drafts have no teammates, so it is
-   * always the default.
+   * Automatic assignments use the official default 「华法琳」, regardless of teammates' choices.
    * @param {string} playerId
    */
   defaultBand(playerId) {
-    const def = this.gd.bandDraft.timeoutBandId;
-    if (!this.bandTaken(def, playerId)) return def;
-    return this.gd.bandIds().find((b) => !this.bandTaken(b, playerId)) || def;
+    return this.gd.bandDraft.timeoutBandId;
   }
 
   /**
    * What a turn that runs out assigns (user playtest #4 item 4): the strategy the player has highlighted in the draft
-   * screen (g.bandFocus — the detail pane's band, the one 确认选择 would take) while it is allowed and no teammate holds
-   * it, else defaultBand.
+   * screen (g.bandFocus — the detail pane's band, the one 确认选择 would take) while it is allowed, else defaultBand.
    * @param {string} playerId
    */
   timeoutBand(playerId) {
     const f = this.draft && this.draft.focus instanceof Map ? this.draft.focus.get(playerId) : null;
-    if (typeof f === 'string' && this.gd.bandAllowed(f) && !this.bandTaken(f, playerId)) return f;
+    if (typeof f === 'string' && this.gd.bandAllowed(f)) return f;
     return this.defaultBand(playerId);
   }
 
@@ -1387,16 +1376,14 @@ export class Match {
     if (this.draft.picks[ps.playerId]) return fail(ERR.ALREADY);
     if (this.draftTurn() !== ps.playerId) return fail(ERR.NOT_YOUR_TURN);
     if (typeof bandId !== 'string' || !this.gd.bandAllowed(bandId)) return fail(ERR.BAD_TARGET);
-    if (this.bandTaken(bandId, ps.playerId)) return fail(ERR.BAD_TARGET, '队友已选');
     this._applyBand(ps, bandId);
     return OK;
   }
 
-  _applyBand(ps, bandId, { dedupe = false } = {}) {
+  _applyBand(ps, bandId) {
     const d = this.draft;
     if (!d || !ps || d.picks[ps.playerId]) return;
-    let id = this.gd.bandAllowed(bandId) ? bandId : this.defaultBand(ps.playerId);
-    if (dedupe && this.bandTaken(id, ps.playerId)) id = this.gd.bandIds().find((b) => !this.bandTaken(b, ps.playerId)) || id;
+    const id = this.gd.bandAllowed(bandId) ? bandId : this.defaultBand(ps.playerId);
     d.picks[ps.playerId] = id;
     ps.bandId = id;
     ps.lp = this.gd.startLp(id);
@@ -1426,7 +1413,7 @@ export class Match {
     this._turnTimer = null;
     for (const ps of this.order) {
       if (!this.draft.picks[ps.playerId]) {
-        // one after another in seat order, so each default sees the ones assigned before it (no duplicates)
+        // Each remaining seat receives the default, including repeated strategies.
         const id = this.defaultBand(ps.playerId);
         this.draft.picks[ps.playerId] = id;
         ps.bandId = id;

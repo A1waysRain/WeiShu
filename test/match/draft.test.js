@@ -32,7 +32,7 @@ test('INFO_CHECK: ends when every human confirmed (bots/departed count as ready)
   h2.m.dispose();
 });
 
-test('band draft (co-op): random order, one pick per turn, NOT_YOUR_TURN, one skip each (moves to the end), 队友已选 refused', () => {
+test('band draft (co-op): random order, one pick per turn, NOT_YOUR_TURN, one skip each (moves to the end), repeated strategies allowed', () => {
   // find a seed where both humans are not first... just use the order the match chose
   const h = makeMatch({ mode: 'coop', humans: 3, seed: 5 }).start();
   const m = h.m;
@@ -52,10 +52,9 @@ test('band draft (co-op): random order, one pick per turn, NOT_YOUR_TURN, one sk
   assert.deepEqual(m.handle(second, { t: 'g.band', bandId: 'band_sarkazb' }), { ok: true });
   assert.equal(h.ps(second).lp, 45, '歌利亚 starts with 45 LP');
   assert.deepEqual(m.handle(second, { t: 'g.band', bandId: 'band_sarkazb' }), { error: ERR.ALREADY });
-  // research 09 §5 / DESIGN §14 corrections: a strategy a teammate already took is 队友已选 (test/ui/bandDraft.test.js)
-  assert.equal(m.handle(third, { t: 'g.band', bandId: 'band_sarkazb' }).error, ERR.BAD_TARGET, '队友已选: no duplicates');
-  assert.equal(m.draftTurn(), third, 'the refused pick keeps the turn');
-  assert.deepEqual(m.handle(third, { t: 'g.band', bandId: 'band_amiya' }), { ok: true });
+  // A teammate's strategy is still selectable.
+  assert.deepEqual(m.handle(third, { t: 'g.band', bandId: 'band_sarkazb' }), { ok: true }, 'teammates may share a strategy');
+  assert.equal(h.ps(third).lp, 45);
   assert.equal(m.draftTurn(), first);
   assert.deepEqual(m.handle(first, { t: 'g.bandSkip' }).error, ERR.ALREADY, 'only one skip');
   assert.deepEqual(m.handle(first, { t: 'g.band', bandId: 'band_lisa' }), { ok: true });
@@ -86,17 +85,14 @@ test('band draft timers (user playtest #4 item 4): one countdown of BAND_TURN_SE
     assert.equal(pub.deadline, pub.draft.turnDeadline, 'one countdown');
     assert.equal(pub.draft.turnSeconds, BAND_TURN_SECONDS);
   }
-  // a timeout gives 华法琳 while no teammate holds it, else the first free strategy by sortId — never 队友已选
-  // (Match.defaultBand): replay the assignments in draft order
-  const taken = new Set();
+  // Every idle human receives 华法琳, regardless of the other seats' choices.
   for (const pid of m.draft.order) {
-    if (pid.startsWith('ai_')) { assert.ok(DATA.bands[h.ps(pid).bandId], 'bot picked a band'); taken.add(h.ps(pid).bandId); continue; }
-    const want = !taken.has('band_bldsk') ? 'band_bldsk' : m.gd.bandIds().find((b) => !taken.has(b));
-    assert.equal(h.ps(pid).bandId, want, `${pid} gets the default strategy nobody else holds`);
+    if (pid.startsWith('ai_')) { assert.ok(DATA.bands[h.ps(pid).bandId], 'bot picked a band'); continue; }
+    const want = 'band_bldsk';
+    assert.equal(h.ps(pid).bandId, want, `${pid} gets the shared default strategy`);
     assert.equal(h.ps(pid).lp, DATA.bands[want].totalHp);
-    taken.add(want);
   }
-  assert.equal(new Set(Object.values(m.draft.picks)).size, 4, 'no duplicate strategies');
+  assert.equal(h.ps('p_0').bandId, h.ps('p_1').bandId, 'both idle humans get the same default');
   m.dispose();
   // 4 humans idle: 4 whole turns (the old 50 s step cap would have cut the last ones short)
   const h2 = makeMatch({ mode: 'coop', humans: 4, seed: 9 }).start();
@@ -110,7 +106,7 @@ test('band draft timers (user playtest #4 item 4): one countdown of BAND_TURN_SE
   assert.ok(took2 >= 4 * TURN_MS - 5 && took2 <= 4 * TURN_MS + 50, `four turns (${took2} ms)`);
   assert.equal(h2.ps(first).bandId, 'band_amiya', 'the first timeout takes the highlighted strategy');
   assert.equal(h2.ps(h2.m.draft.order[1]).bandId, 'band_bldsk', 'the next one the official default');
-  assert.equal(new Set([...h2.m.players.values()].map((ps) => ps.bandId)).size, 4, 'the rest get distinct free strategies');
+  assert.equal(new Set([...h2.m.players.values()].map((ps) => ps.bandId)).size, 2, 'one highlighted strategy and the shared default');
   h2.m.dispose();
   // data and code say the same: data/config.json timers.bandTurn (tools/build-data.mjs) = Match.BAND_TURN_SECONDS
   assert.equal(DATA.config.timers.bandTurn, BAND_TURN_SECONDS);
