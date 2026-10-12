@@ -641,7 +641,7 @@ const KITS = {
         },
         onStart({ unit }) { unit.mem.blazeAcc = 0; },
         onTick({ battle, unit, dt }) {
-          if (!(lose > 0)) return;
+          if (!(lose > 0) || !on(unit) || unit.mem.downed) return;
           unit.mem.blazeAcc = (unit.mem.blazeAcc ?? 0) + dt;
           while (unit.mem.blazeAcc >= 1 && unit.alive) {
             unit.mem.blazeAcc -= 1;
@@ -685,6 +685,16 @@ const KITS = {
         } },
       ],
       install(battle, unit) {
+        // Downed units remain alive on the field. Disarm stops attacks, but does not stop skill activation.
+        // Guard every activation path until 绝处重燃 finishes, retaining SP for revival.
+        const sk = unit.skill;
+        if (sk && !Object.prototype.hasOwnProperty.call(sk, 'activate')) {
+          const activate = sk.activate;
+          Object.defineProperty(sk, 'activate', {
+            configurable: true, writable: true, enumerable: false,
+            value(...args) { return unit.mem.downed ? false : activate.apply(this, args); },
+          });
+        }
         burstDamageUp(battle, unit, num(tb.damage_scale));
         burstSpUp(battle, unit, 'blaze2:module', num(tm.sp_recovery_per_sec));
         if (sid === 'skchr_blaze2_2') whileOn(battle, unit, AURA_IV, () => burnTiles(battle, unit));

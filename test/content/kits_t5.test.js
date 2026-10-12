@@ -173,6 +173,34 @@ test('烛煌 S3: its target and the enemies within the 1.7 splash, BAT −1.3 s,
 });
 
 // ------------------------------------------------------------------------------------------------------------------
+test('烛煌 S3: cannot restart or drain HP while downed, naturally revives and can cast afterwards', () => {
+  for (const id of ['chess_char_5_03_a', 'chess_char_5_03_b']) {
+    const h = makeBattle({ units: [{ chessId: id, row: 10, col: 3 }],
+      defs: { enemies: { enemy_dummy: dummy('enemy_dummy', { atk: 0 }) } },
+      enemies: [{ key: 'enemy_dummy', pos: [10, 5] }], autoFinish: false, timeLimit: 120 });
+    h.step();
+    const u = h.unit(id);
+    u.skill.gainSp(1000);
+    assert.ok(h.runUntil(() => u.skill.active, 10));
+    h.b.dealDamage(null, u, { amount: 1e9, type: 'true' });
+    assert.ok(u.mem.downed);
+    assert.equal(u.skill.active, false);
+    const casts = u.skill.activations;
+    const before = u.hp;
+    u.skill.gainSp(1000); // Ready SP must not bypass the downed restriction.
+    assert.equal(u.skill.activate('manual'), false);
+    h.run(2);
+    assert.equal(u.skill.activations, casts);
+    assert.equal(u.skill.active, false);
+    assert.ok(u.hp > before, 'downed regeneration proceeds without skill drain');
+    const ratio = tal(u, 1).hp_recovery_per_sec_by_max_hp_ratio;
+    assert.ok(h.runUntil(() => !u.mem.downed, 1 / ratio + 2), 'revives through its own regeneration');
+    assert.ok(!u.hasBuff('blaze2:downed'));
+    assert.ok(h.runUntil(() => u.skill.activations > casts, 5), 'skill becomes usable after revival');
+    clean(h);
+  }
+});
+
 test('华法琳 S1: the next heal on a target below half HP adds hp_ratio × max HP; charges only spent below 50 %; T1 SP on kills', () => {
   const h = makeBattle({
     defs: { enemies: { enemy_dummy: dummy() }, chess: { t_ally: ally('t_ally') } },
