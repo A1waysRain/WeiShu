@@ -1937,7 +1937,7 @@ const KITS = {
   // around it get healing ×0.5, take 120/140 % ATK arts per second, allies heal 12/15 % ATK per second; the unit drifts
   // along the throw direction and its radius grows. T1 心相: ATK +10 %, +3 s when another op is in range.
   // T2 视界: allies ASPD +5, enemies −5 (doubled on straight roads ≥ 6 tiles). Module (elite): +0.1 SP/s with a unit out.
-  // S1 度算浪波 (instant): an alchemy unit thrown at the ally in her range with the lowest HP ratio: for
+  // S1 度算浪波 (instant): casts with an ally in skill range (including tokens), targeting the latest deployment: for
   // projectile_delay_time s (+3 s 心相) allies on the landing tile and the 8 around it get DEF +def and heal
   // hp_recovery_per_sec_ratio × ATK per second. S3 “我的海疆”: passive — her range is the skill range; active
   // (instant) — alchemy units on the max_target_token operators with the lowest block count: for projectile_delay_time s
@@ -1950,6 +1950,11 @@ const KITS = {
     const r0 = num(bb.projectile_range, 1.1), grow = num(bb.value), speed = num(bb.projectile_move_speed);
     const healMul = Math.max(0, num(bb.heal_scale, 1));
     const extend = (battle, unit) => (battle.alliesInGrid(unit).some((a) => a !== unit && isOp(a)) ? Math.min(num(t0.projectile_extend), num(t0.projectile_extend_max, Infinity)) : 0);
+    const guardTargets = (battle, unit) => {
+      const keys = new Set(absoluteRangeKeys(unit.skill.def.rangeGrid ?? unit.rangeGrid, unit.tileR, unit.tileC, unit.dir, unit.s.rangeExtend));
+      return battle.alliesFor(unit).filter((a) => !a.hidden && a.hp > 0 && keys.has(a.tileR * COLS + a.tileC))
+        .sort((a, b) => b.deploySeq - a.deploySeq || b.id - a.id);
+    };
     // S3 ramp: value after `steps` intervals, clamped towards the max ("效果逐渐提升…15秒后达到最大")
     const ramp = (base, per, max, steps) => {
       const v = num(base) + num(per) * steps;
@@ -1985,8 +1990,9 @@ const KITS = {
       skills: lazySkills({
         skchr_thorn2_1: () => ({
           kind: instantKind(chess, def),
+          trigger: NEVER,
           onStart({ battle, unit }) {
-            const t = battle.alliesInGrid(unit).filter((a) => a.hp > 0).sort((a, b) => a.hpRatio - b.hpRatio || b.blocking.length - a.blocking.length || dist(a, unit) - dist(b, unit) || a.id - b.id)[0];
+            const t = guardTargets(battle, unit)[0];
             if (!t) return;
             const z = { type: 'guard', r: t.tileR, c: t.tileC, x: t.x, y: t.y, t: 0, acc: 0, dur: num(bb.projectile_delay_time, 6) + extend(battle, unit) };
             (unit.mem.zones ??= []).push(z);
@@ -2054,6 +2060,7 @@ const KITS = {
       ],
       install(battle, unit) {
         const sp = num(tm.sp_recovery_per_sec);
+        if (sid === 'skchr_thorn2_1') autoCast(battle, unit, () => !unit.skill.opCooling && guardTargets(battle, unit).length > 0);
         if (sid === 'skchr_thorn2_3') { // S3 被动效果：攻击范围扩大 (her own range, so also the DEFAULT trigger range)
           const g = skillGrid(chess, def);
           if (g) { unit.rangeGrid = g; battle.refreshRange(unit); }

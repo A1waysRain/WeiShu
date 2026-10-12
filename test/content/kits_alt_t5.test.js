@@ -1000,7 +1000,7 @@ test('凛御银灰 S3 变革已至: skill range, line attacks bird_atk_scale × 
 // =================================================================================================================
 // 引星棘刺
 
-test('引星棘刺 S1 度算浪波: an alchemy unit on the lowest-HP ally: DEF +def and hp ratio × ATK/s on the 3×3 around it (+3 s 心相)', () => {
+test('引星棘刺 S1 度算浪波: latest deployed ally in range gets the guard zone, DEF and healing (+3 s 心相)', () => {
   for (const id of pair('15')) {
     const h = run({
       defs: { chess: { t_low: ally('t_low', { stats: { def: 100 } }), t_near: ally('t_near', { stats: { def: 100 } }), t_far: ally('t_far', { stats: { def: 100 } }) }, enemies: { enemy_dummy: dummy('enemy_dummy') } },
@@ -1012,9 +1012,11 @@ test('引星棘刺 S1 度算浪波: an alchemy unit on the lowest-HP ally: DEF +
     const low = h.unit('t_low'), near = h.unit('t_near'), far = h.unit('t_far');
     h.step();
     low.hp = low.s.maxHp * 0.3; near.hp = near.s.maxHp * 0.8; far.hp = far.s.maxHp * 0.8;
+    h.b.retreat(low);
+    h.b.redeploy(low, { free: true });
     cast(h, u);
     const z = u.mem.zones.at(-1);
-    assert.deepEqual([z.type, z.r, z.c], ['guard', 10, 5], 'on the lowest-HP ally');
+    assert.deepEqual([z.type, z.r, z.c], ['guard', 10, 5], 'on the last redeployed ally');
     approx(z.dur, bb.projectile_delay_time + t0.projectile_extend, '+3 s: another op in her range');
     h.run(1.1);
     for (const a of [low, near]) assert.equal(a.s.def, 100 + bb.def, a.defId);
@@ -1024,6 +1026,28 @@ test('引星棘刺 S1 度算浪波: an alchemy unit on the lowest-HP ally: DEF +
     h.run(z.dur);
     assert.ok(!u.mem.zones.includes(z), 'expired');
     assert.equal(low.s.def, 100, 'no DEF bonus afterwards');
+    done(h);
+  }
+});
+
+test('引星棘刺 S1: full-HP allies and real summons trigger without enemies, latest deployment wins', () => {
+  for (const id of pair('15')) for (const tokenId of ['token_10028_vigil_wolf', 'token_10030_mlyss_wtrman']) {
+    const h = run({ units: [entry(id, 'skchr_thorn2_1', { row: 10, col: 3 })], enemies: [] });
+    const u = sel(h, id, 'skchr_thorn2_1');
+    // Exclude the caster's own tile so the test requires another friendly unit.
+    u.skill.def = { ...u.skill.def, rangeGrid: [[0, 2]] };
+    u.skill.gainSp(1000);
+    h.run(4);
+    assert.equal(u.skill.activations, 0, 'no ally in skill range');
+    const outside = h.b.spawnToken(u, tokenId, 10, 7, { anySource: true });
+    assert.ok(outside);
+    h.run(1);
+    assert.equal(u.skill.activations, 0, 'out-of-range summons do not trigger');
+    const token = h.b.spawnToken(u, tokenId, 10, 5, { anySource: true });
+    assert.ok(token);
+    assert.equal(token.hp, token.s.maxHp);
+    assert.ok(h.runUntil(() => u.skill.activations > 0, 3), 'full-HP summon triggers without enemies');
+    assert.deepEqual([u.mem.zones.at(-1).r, u.mem.zones.at(-1).c], [token.tileR, token.tileC]);
     done(h);
   }
 });
