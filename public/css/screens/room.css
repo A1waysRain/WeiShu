@@ -48,6 +48,13 @@
   gap: .3rem;
   padding: .3rem .6rem .24rem;
 }
+.seats--ten {
+  grid-template-columns: repeat(5, minmax(0, 3.8rem));
+  grid-template-rows: none;
+  grid-auto-rows: minmax(4rem, auto);
+  align-content: start;
+  overflow-y: auto;
+}
 @media (max-width: 1100px) {
   .seats:not(.seats--solo) { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: none; grid-auto-rows: minmax(4rem, auto); align-content: start; overflow-y: auto; }
 }

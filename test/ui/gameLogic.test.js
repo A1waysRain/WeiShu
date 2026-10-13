@@ -411,7 +411,7 @@ describe('drafts', () => {
     const sp2 = normalizeSp({ cards: [{}, {}], order: ['b', 'a'], turn: 0, picks: [{ playerId: 'b', idx: 1 }, { playerId: 'x', idx: 9 }] }, players);
     assert.equal(sp2.turnPid, 'b'); assert.equal(sp2.cards[1].takenBy, 'b'); assert.equal(sp2.pickOf.has('x'), false);
     assert.equal(normalizeSp(null), null);
-    assert.equal(normalizeSp({ cards: new Array(9).fill({}) }).cards.length, 8, 'at most 8 cards');
+    assert.equal(normalizeSp({ cards: new Array(13).fill({}) }).cards.length, 12, 'at most 12 cards');
   });
   test('six-player machine choices retain the seventh and eighth cards and their owners', () => {
     for (const family of ['supply', 'shop', 'bounty', 'tactic']) {
@@ -422,6 +422,13 @@ describe('drafts', () => {
       assert.equal(sp.cards[7].takenBy, 'ai_4');
       assert.equal(sp.pickOf.get('ai_4'), 7);
     }
+  });
+  test('ten-player machine choices retain the twelfth card and tenth player', () => {
+    const sp = normalizeSp({ cards: Array.from({ length: 12 }, (_, idx) => ({ id: `card_${idx}` })),
+      order: Array.from({ length: 10 }, (_, i) => `p_${i}`), turn: 9, picks: { p_9: 11 } });
+    assert.equal(sp.cards.length, 12);
+    assert.equal(sp.turnPid, 'p_9');
+    assert.equal(sp.cards[11].takenBy, 'p_9');
   });
 });
 

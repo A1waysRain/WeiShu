@@ -1066,14 +1066,15 @@ describe('screen helpers', () => {
         { seat: 3, playerId: 'ai_1', name: 'AI·华法琳', isBot: true, ready: true, connected: true },
       ],
     };
-    assert.equal(normalizeSeats(room).length, 4);
+    assert.equal(normalizeSeats(room).length, 6);
+    assert.equal(normalizeSeats({ ...room, mode: 'coop10' }).length, 10);
     assert.equal(normalizeSeats({ mode: 'solo', seats: [room.seats[0], null, null, null] }).length, 1);
-    assert.deepEqual(normalizeSeats({ mode: 'coop', seats: 'bad' }), [null, null, null, null]);
+    assert.deepEqual(normalizeSeats({ mode: 'coop', seats: 'bad' }), Array(6).fill(null));
     let f = roomFacts(room, 'h');
     assert.equal(f.isHost, true);
     assert.equal(f.canStart, false, 'guest not ready');
     assert.equal(f.humans.length, 2);
-    assert.equal(f.emptySeats, 1);
+    assert.equal(f.emptySeats, 3);
     assert.equal(f.readyHumans, 1, 'host counts as ready (start = host ready)');
     room.seats[1].ready = true;
     f = roomFacts(room, 'h');
@@ -1116,7 +1117,7 @@ describe('screen helpers', () => {
     assert.equal(f.spectating, true);
     assert.equal(f.mine, null);
     assert.equal(f.humans.length, 1, 'never a player');
-    assert.equal(f.emptySeats, 3, 'a free player seat stays free (入座)');
+    assert.equal(f.emptySeats, 5, 'a free player seat stays free (入座)');
     assert.deepEqual(f.spectators.map((x) => x.playerId), ['s']);
     const hf = roomFacts(room, 'h');
     assert.equal(hf.canStart, true, 'a spectator never blocks the start');

@@ -31,6 +31,7 @@ test('six players: all bounty stages offer eight distinct cards and all players 
   h.m.round = 3;
   h.m.enterSpDraft();
   assert.equal(h.m.sp.cards.length, 8);
+  assert.equal(h.m.pickCard(h.m.players.get(h.m.spTurn()), 8).ok, undefined);
   for (let idx = 0; idx < 6; idx++) {
     const ps = h.m.players.get(h.m.spTurn());
     assert.deepEqual(h.m.pickCard(ps, idx), { ok: true });
@@ -57,8 +58,9 @@ test('one human with five AI receives all eight supply choices through client no
   h.m.dispose();
 });
 
-test('protocol accepts the sixth seat and eighth choice and rejects indexes beyond the limits', () => {
+test('protocol supports ten-player transport while six-player drafts retain eight choices', () => {
   assert.equal(validateC2S({ t: 'room.removeBot', seat: 5 }), null);
   assert.equal(validateC2S({ t: 'g.choice', idx: 7 }), null);
-  assert.equal(validateC2S({ t: 'g.choice', idx: 8 }), 'bad field idx');
+  assert.equal(validateC2S({ t: 'g.choice', idx: 8 }), null);
+  assert.equal(validateC2S({ t: 'g.choice', idx: 12 }), 'bad field idx');
 });

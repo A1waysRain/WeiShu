@@ -5,7 +5,11 @@ export const PROTOCOL_VERSION = 1;
  * (test/version.test.js); PROTOCOL_VERSION above is the separate wire-format number. */
 export const APP_VERSION = '0.1.3';
 
+// Keep the original co-op capacity stable; each room opts into its own capacity.
 export const MAX_SEATS = 6;
+export const MAX_TEN_PLAYER_SEATS = 10;
+export const ROOM_MODES = Object.freeze(['solo', 'coop', 'coop10']);
+export const roomCapacity = (mode) => mode === 'solo' ? 1 : mode === 'coop10' ? MAX_TEN_PLAYER_SEATS : MAX_SEATS;
 /**
  * Spectator seats of a co-op room (community report #26, owner's decision 2026-10-04) — a remake feature: the official
  * room has 1–4 players and no spectator seat (there only eliminated players and 联防 bystanders watch, research 09 §3.1).

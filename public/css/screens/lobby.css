@@ -15,7 +15,7 @@
 .lobby-left, .lobby-right { display: flex; flex-direction: column; min-width: 0; }
 
 /* ---- mode cards ------------------------------------------------------------------------------------ */
-.mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: .24rem; margin-bottom: .34rem; }
+.mode-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .24rem; margin-bottom: .34rem; }
 .mode-card {
   --bk-c: transparent;
   --bk-l: .2rem;
@@ -71,7 +71,7 @@
 }
 .mode-card__icon .icon { width: .44rem; height: .44rem; }
 .mode-card__text { position: relative; display: flex; flex-direction: column; gap: .1rem; }
-.mode-card__name { font-size: .46rem; font-weight: 900; letter-spacing: .08em; line-height: 1.1; }
+.mode-card__name { font-size: .36rem; font-weight: 900; letter-spacing: .04em; line-height: 1.2; }
 .mode-card__desc { font-size: .17rem; color: var(--text-lo); line-height: 1.65; max-width: 3.6rem; }
 .mode-card__points { display: flex; flex-direction: column; gap: .05rem; margin-top: .06rem; font-size: .15rem; color: var(--text-md); }
 .mode-card__points span::before {

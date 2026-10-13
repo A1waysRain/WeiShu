@@ -485,7 +485,7 @@ describe('websocket lobby', () => {
     await expectError(c, { t: 'room.join', code: 'AB CD' }, ERR.BAD_MSG);
     await expectError(c, { t: 'room.join', code: { $gt: '' } }, ERR.BAD_MSG);
     await expectError(c, { t: 'room.ready', ready: 'yes' }, ERR.BAD_MSG);
-    await expectError(c, { t: 'room.removeBot', seat: 9 }, ERR.BAD_MSG);
+    await expectError(c, { t: 'room.removeBot', seat: 10 }, ERR.BAD_MSG);
     await expectError(c, { t: 'g.buy', slot: -1 }, ERR.BAD_MSG);
     await expectError(c, { t: 'g.move', uid: 1, to: { area: 'moon' } }, ERR.BAD_MSG);
     await expectError(c, { t: 'ping', c: 'x' }, ERR.BAD_MSG);
@@ -588,7 +588,7 @@ describe('websocket lobby', () => {
     const host = await pool.player('H');
     const st = await createRoom(host);
     const guests = [];
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < MAX_SEATS - 2; i++) {
       const g = await pool.player(`G${i}`);
       await joinRoom(g, st.code);
       guests.push(g);
@@ -604,6 +604,35 @@ describe('websocket lobby', () => {
     assert.equal(soloState.mode, 'solo');
     await expectError(late, { t: 'room.join', code: soloState.code }, ERR.ROOM_FULL);
     await expectError(solo, { t: 'room.addBot' }, ERR.ROOM_FULL);
+  });
+
+  test('six- and ten-player rooms coexist with independent capacity and matches', async () => {
+    const six = await pool.player('Six');
+    const ten = await pool.player('Ten');
+    const s6 = await createRoom(six, 'coop');
+    const s10 = await createRoom(ten, 'coop10');
+    assert.equal(s6.seats.length, 6);
+    assert.equal(s10.seats.length, 10);
+    for (let i = 1; i < 6; i++) await expectOk(six, { t: 'room.addBot' });
+    for (let i = 1; i < 10; i++) await expectOk(ten, { t: 'room.addBot' });
+    await expectError(six, { t: 'room.addBot' }, ERR.ROOM_FULL);
+    await expectError(ten, { t: 'room.addBot' }, ERR.ROOM_FULL);
+    await expectError(six, { t: 'room.removeBot', seat: 9 }, ERR.BAD_TARGET);
+    await expectOk(ten, { t: 'room.removeBot', seat: 9 });
+    const guest = await pool.player('Tenth');
+    const joined = await joinRoom(guest, s10.code);
+    assert.equal(seatOf(joined, guest.id).seat, 9);
+    const extra = await pool.player('Extra');
+    await expectError(extra, { t: 'room.join', code: s6.code }, ERR.ROOM_FULL);
+    await expectError(extra, { t: 'room.join', code: s10.code }, ERR.ROOM_FULL);
+    await expectOk(ten, { t: 'room.kick', seat: 9, playerId: guest.id });
+    await expectOk(ten, { t: 'room.addBot' });
+    await expectOk(ten, { t: 'room.start' });
+    await ten.waitFor('room.state', s => s.inMatch && s.mode === 'coop10');
+    await expectOk(six, { t: 'room.removeBot', seat: 5 });
+    await expectOk(six, { t: 'room.addBot' });
+    await expectOk(six, { t: 'room.start' });
+    await six.waitFor('room.state', s => s.inMatch && s.mode === 'coop' && s.seats.length === 6);
   });
 
   // community report #26 (a remake feature): spectator seats — server/lobby.js header

@@ -10,7 +10,7 @@
 // plays 战场#01, 险境 draws one of 8, 绝境 / 终极 one of 7 (m01 excluded).
 
 import { useEffect, useRef, useState } from '../../vendor/hooks.module.js';
-import { DIFFICULTIES, DIFFICULTY_NAMES, DIFFICULTY_COLORS, ROOM_CODE_LEN, MAX_SEATS, MAX_SPECTATORS, modeIdFor } from '../../../shared/constants.js';
+import { DIFFICULTIES, DIFFICULTY_NAMES, DIFFICULTY_COLORS, ROOM_CODE_LEN, MAX_SEATS, ROOM_MODES, MAX_SPECTATORS, modeIdFor } from '../../../shared/constants.js';
 import { html, Button, Icon, MicroLabel, Panel, TextField, PingPill, AvatarFrame, Tooltip, Spinner, DifficultyIcon, doctorNo } from '../ui/components.js';
 import { toast, toastError } from '../ui/toasts.js';
 import { GuideButton } from '../ui/guide.js';
@@ -72,9 +72,14 @@ const MODE_CARDS = [
     points: ['1 名博士', '休整期与机变阶段不限时'],
   },
   {
-    id: 'coop', name: '同盟模拟', en: 'ALLIANCE SIMULATION', icon: 'users',
+    id: 'coop', name: '同盟模拟 · 6人房', en: 'ALLIANCE SIMULATION', icon: 'users',
     desc: `与至多 ${MAX_SEATS - 1} 名博士组成同盟，共享干员池，联防协作抵御敌潮。`,
     points: [`1–${MAX_SEATS} 名博士 · 可由 AI 队友补位`, '联防阶段 · 最终攻势合并生命值'],
+  },
+  {
+    id: 'coop10', name: '同盟模拟 · 10人房', en: 'TEN PLAYER ALLIANCE', icon: 'users',
+    desc: '最多十人共同作战，共享干员池，赠送、联防与首领战由全房参与。',
+    points: ['1–10 名博士 · 可由 AI 队友补位', '满员机变提供 12 个选择'],
   },
 ];
 
@@ -233,7 +238,10 @@ export function LobbyScreen() {
   const me = useStore((s) => s.me, shallowEqual);
   const conn = useStore((s) => s.connection, shallowEqual);
   useData('config');
-  const [roomMode, setRoomMode] = useState(() => (loadPref('lobby.mode', 'coop') === 'solo' ? 'solo' : 'coop'));
+  const [roomMode, setRoomMode] = useState(() => {
+    const mode = loadPref('lobby.mode', 'coop');
+    return ROOM_MODES.includes(mode) ? mode : 'coop';
+  });
   const [difficulty, setDifficulty] = useState(() => {
     const d = loadPref('lobby.difficulty', 'FUNNY');
     return DIFFICULTIES.includes(d) ? d : 'FUNNY';
