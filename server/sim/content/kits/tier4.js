@@ -1732,7 +1732,7 @@ const kits = {
           });
         } },
         { install(battle, unit) { // 医学背景: healing received +20 %, +40 % below half HP
-          battle.on('heal', (c) => { if (c.target === unit) c.amount *= unit.hpRatio < num(t1.hp_ratio, 0.5) ? num(t1.heal_scale_2, 1.4) : num(t1.heal_scale_1, 1.2); }, { owner: unit });
+          battle.on('heal', (c) => { if (c.target === unit && !c.opts?.regen) c.amount *= unit.hpRatio < num(t1.hp_ratio, 0.5) ? num(t1.heal_scale_2, 1.4) : num(t1.heal_scale_1, 1.2); }, { owner: unit });
         } },
       ],
       install(battle, unit) {

@@ -898,7 +898,7 @@ function yu(bb, chess, def) {
           const ops = opsOf(battle, unit.ownerId);
           if (ops.length < cnt) return;
           for (const a of s3On(unit) ? ops : [unit]) {
-            if (hr > 0) battle.heal(unit, a, a.s.maxHp * hr * iv, { self: true, silent: true });
+            if (hr > 0) battle.heal(unit, a, a.s.maxHp * hr * iv, { regen: true, silent: true });
             if (er > 0) battle.reduceElement(a, a.s.maxHp * er * iv);
           }
         });
@@ -1015,7 +1015,7 @@ function skadi2(bb, chess, def) {
           }
           if (n % 2 === 0) {
             const amount = unit.s.atk * (on ? skillRatio : num(unit.profile?.auraRatio, auraRatio));
-            for (const a of allies) if (a.hp < a.s.maxHp) battle.heal(unit, a, amount, { aura: true });
+            for (const a of allies) if (a.hp < a.s.maxHp) battle.heal(unit, a, amount, { aura: true, regen: true });
           }
         }, { owner: unit });
       },

@@ -1452,7 +1452,7 @@ const KITS = {
           if (unit.mem.foxHeal >= 1) {
             unit.mem.foxHeal -= 1;
             if (!(healRatio > 0)) return;
-            for (const a of battle.alliesInGrid(unit)) if (a.hp < a.s.maxHp) battle.heal(unit, a, unit.s.atk * healRatio, { aura: true });
+            for (const a of battle.alliesInGrid(unit)) if (a.hp < a.s.maxHp) battle.heal(unit, a, unit.s.atk * healRatio, { aura: true, regen: true });
           }
         },
       },
@@ -1979,7 +1979,7 @@ const KITS = {
         if (z.acc >= 1 - 1e-9) {
           z.acc -= 1;
           const heal = unit.s.atk * num(bb.hp_recovery_per_sec_ratio);
-          if (heal > 0) for (const a of allies) if (a.hp < a.s.maxHp) battle.heal(unit, a, heal, { aura: true });
+          if (heal > 0) for (const a of allies) if (a.hp < a.s.maxHp) battle.heal(unit, a, heal, { aura: true, regen: true });
         }
         return;
       }
@@ -2094,7 +2094,7 @@ const KITS = {
               z.acc -= 1;
               for (const e of foes) battle.dealDamage(unit, e, { amount: unit.s.atk * num(bb.atk_scale), type: 'arts', isSkill: true, tags: ['skill', 'alchemy'] });
               const heal = unit.s.atk * num(bb.hp_recovery_per_sec_ratio_chr);
-              if (heal > 0) for (const a of battle.alliesInRadius(z.x, z.y, r, null)) if (a.hp < a.s.maxHp) battle.heal(unit, a, heal, { aura: true });
+              if (heal > 0) for (const a of battle.alliesInRadius(z.x, z.y, r, null)) if (a.hp < a.s.maxHp) battle.heal(unit, a, heal, { aura: true, regen: true });
               battle.fx('zone', { x: z.x, y: z.y, id: unit.id, r, duration: Math.max(0, z.dur - z.t) });
             }
           }
@@ -2232,7 +2232,7 @@ const KITS = {
         } },
         { install(battle, unit) { // 医学背景
           battle.on('heal', (c) => {
-            if (c.target !== unit) return;
+            if (c.target !== unit || c.opts?.regen) return;
             c.amount *= unit.hpRatio < num(t1.hp_ratio, 0.5) ? num(t1.heal_scale_2, 1) : num(t1.heal_scale_1, 1);
           }, { owner: unit });
         } },

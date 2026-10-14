@@ -280,7 +280,7 @@ export function tinmanKit(bb, chess, def) {
               if (wither > 1) b.addBuff(e, { key: witherKey, duration: 1.05, data: { mul: wither }, source: unit });
               b.dealDamage(unit, e, { amount: atk * dmgScale, type: 'arts', isSkill: true, canDodge: false, tags: ['dot', 'zone'] });
             }
-            if (healRatio > 0) for (const a of b.alliesInRadius(x, y, radius, null)) if (a.hp < a.s.maxHp) b.heal(unit, a, atk * healRatio, { tags: ['zone'] });
+            if (healRatio > 0) for (const a of b.alliesInRadius(x, y, radius, null)) if (a.hp < a.s.maxHp) b.heal(unit, a, atk * healRatio, { regen: true, tags: ['zone'] });
           },
           onEnd() { unit.mem.tinZones = Math.max(0, (unit.mem.tinZones ?? 1) - 1); },
         });

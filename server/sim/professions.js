@@ -376,7 +376,7 @@ const installBard = (battle, unit) => {
     if (!unit.canAct) return;
     const amount = unit.s.atk * (unit.profile.auraRatio ?? 0.1);
     for (const ally of battle.alliesInGrid(unit)) {
-      if (ally.hp < ally.s.maxHp) battle.heal(unit, ally, amount, { aura: true });
+      if (ally.hp < ally.s.maxHp) battle.heal(unit, ally, amount, { aura: true, regen: true });
     }
   }, { owner: unit });
 };

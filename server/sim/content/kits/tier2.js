@@ -665,7 +665,7 @@ export default {
         battle.every(1, () => {
           if (!up(unit)) return;
           const amt = unit.s.atk * r;
-          for (const a of battle.alliesFor(unit)) if (a.hp < a.s.maxHp) battle.heal(unit, a, amt, { aura: true, tags: ['talent'] });
+          for (const a of battle.alliesFor(unit)) if (a.hp < a.s.maxHp) battle.heal(unit, a, amt, { aura: true, regen: true, tags: ['talent'] });
         }, { owner: unit });
       } }],
     };

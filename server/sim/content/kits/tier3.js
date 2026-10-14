@@ -1117,7 +1117,10 @@ const KITS = {
               unit.mem.blemshRegen = (unit.mem.blemshRegen ?? 0) + dt;
               while (unit.mem.blemshRegen >= 1 - 1e-9) {
                 unit.mem.blemshRegen -= 1;
-                for (const a of battle.injuredAlliesInKeys(new Set(gridKeys(grid, unit)), unit)) battle.heal(unit, a, unit.s.atk * ratio);
+                const keys = new Set(gridKeys(grid, unit));
+                for (const a of battle.alliesFor(unit)) {
+                  if (keys.has(a.tileR * COLS + a.tileC) && a.hp < a.s.maxHp) battle.heal(unit, a, unit.s.atk * ratio, { regen: true });
+                }
               }
             },
           };

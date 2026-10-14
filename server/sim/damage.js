@@ -513,9 +513,10 @@ export function reduceElement(target, amount, el = null) {
 export function heal(battle, source, target, amount, opts = {}) {
   if (!target || !target.alive || target.removed || !target.deployed || target.bossPool) return 0;
   const self = source === target || !!opts.self;
-  if (!self && (target.s.flags.noHeal || (target.profile && target.profile.noHeal))) return 0;
+  if (!opts.regen && !self && (target.s.flags.noHeal || (target.profile && target.profile.noHeal))) return 0;
   if (target.s.flags.healFree && !opts.regen && !opts.ignoreHealFree) return 0;
-  let amt = amount * (source && source.s ? source.s.healingDealtMul : 1) * target.s.healingTakenMul;
+  // HP recovery bypasses healing eligibility and healing multipliers, including healing reduction.
+  let amt = opts.regen ? amount : amount * (source && source.s ? source.s.healingDealtMul : 1) * target.s.healingTakenMul;
   if (!(amt > 0) || !Number.isFinite(amt)) return 0;
   if (battle._hooks.heal) {
     const ctx = { source, target, amount: amt, opts };
