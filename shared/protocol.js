@@ -280,6 +280,7 @@ export const C2S = {
   'g.destroy': { uid: isUid },
   'g.reward': { idx: (v) => isInt(v, 0, 5) },
   'g.choice': { idx: (v) => isInt(v, 0, MAX_TEN_PLAYER_SEATS + 1) },
+  'g.choiceSkip': {},
   'g.ready': { ready: isBool },
   'g.emote': { id: (v) => EMOTES.includes(v) },
   'g.watch': { fieldId: (v) => isStr(v, 32) },

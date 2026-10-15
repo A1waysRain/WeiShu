@@ -95,8 +95,9 @@ describe('2: 机变 cards take two taps (select → confirm), like buying in the
     const s = sp();
     const taps = [];
     let confirmed = 0;
+    let enemyInfo = 0;
     const v = ChoiceView({ pub: { players: [{ playerId: 'me', seat: 0, name: 'Me' }, { playerId: 'p2', seat: 1, name: 'P2' }], deadline: 0 }, sp: s, ...me,
-      armed: 1, onTap: (i) => taps.push(i), onConfirm: () => { confirmed++; } });
+      armed: 1, onTap: (i) => taps.push(i), onConfirm: () => { confirmed++; }, onShowEnemies: () => { enemyInfo++; } });
     assert.ok(hasClass(v, 'has-armed'));
     const nodes = [...walk(v)];
     const cards = nodes.filter((n) => hasClass(n, 'spcard'));
@@ -109,6 +110,10 @@ describe('2: 机变 cards take two taps (select → confirm), like buying in the
     assert.ok(btn && textOf(btn.props.children).includes('确认选择'), 'the header confirm');
     btn.props.onClick();
     assert.equal(confirmed, 1);
+    const intel = nodes.find((n) => n.props?.['data-testid'] === 'sp-enemies');
+    assert.ok(intel && textOf(intel.props.children).includes('本轮敌人'));
+    intel.props.onClick();
+    assert.equal(enemyInfo, 1);
     cards[0].props.onClick();
     cards[1].props.onClick();
     cards[2].props.onClick(); // taken: disabled, never tapped
@@ -117,8 +122,16 @@ describe('2: 机变 cards take two taps (select → confirm), like buying in the
     // nothing selected: no strip, no confirm button, the hint says how it works
     const idle = [...walk(ChoiceView({ pub: { players: [] }, sp: s, ...me }))];
     assert.ok(!idle.some((n) => hasClass(n, 'spcard__confirm')));
-    assert.ok(!idle.some((n) => n.type === Button));
+    assert.ok(idle.some((n) => n.props?.['data-testid'] === 'sp-enemies'), 'bounty intel remains available before a card is selected');
     assert.match(textOf(idle.find((n) => hasClass(n, 'spov__sub'))), /点击卡牌选中，再次点击确认/);
+  });
+
+  test('skip is available on non-bounty machine drafts when it is my turn and I still have a pass', () => {
+    const s = sp({ family: 'supply', skipsLeft: new Map([['me', 1]]) });
+    const v = [...walk(ChoiceView({ pub: { players: [] }, sp: s, ...me }))];
+    assert.ok(v.some((n) => n.props?.['data-testid'] === 'sp-skip'));
+    const solo = [...walk(ChoiceView({ pub: { players: [] }, sp: s, myId: 'me', solo: true }))];
+    assert.ok(!solo.some((n) => n.props?.['data-testid'] === 'sp-skip'));
   });
 
   test('3: an untimed 机变 (solo, a single human) shows no clock and says so; a timed one keeps its countdown', () => {

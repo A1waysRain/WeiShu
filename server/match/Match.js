@@ -923,7 +923,7 @@ export class Match {
       const s = this.sp;
       v.sp = {
         family: s.family, name: s.name, desc: s.desc, eventId: s.eventId, cards: s.cards.map(cardView), order: s.order.slice(),
-        turn: this.spTurn(), picks: { ...s.picks }, taken: { ...s.taken }, untimed: !!s.untimed,
+        turn: this.spTurn(), picks: { ...s.picks }, taken: { ...s.taken }, skipsLeft: { ...s.skipsLeft }, untimed: !!s.untimed,
       };
     }
     if (this.phase === PHASE.UNITE && this.unitePlan) v.unite = { helpers: this.unitePlan.helpers.map((p) => p.playerId), leakers: this.unitePlan.leakers.map((p) => p.playerId) };
@@ -1045,6 +1045,7 @@ export class Match {
       case 'g.destroy': return ps.destroy(msg.uid);
       case 'g.reward': return ps.pickReward(msg.idx);
       case 'g.choice': return this.pickCard(ps, msg.idx);
+      case 'g.choiceSkip': return this.skipSp(ps);
       case 'g.ready': return ps.setReady(!!msg.ready);
       case 'g.emote': return this.emote(ps, msg.id);
       case 'g.watch': return this.watch(ps, msg.fieldId);
@@ -1493,7 +1494,12 @@ export class Match {
     if (!this.isSolo) this.rngDraft.shuffle(order);
     // untimed: solo and any single-human match (soloUntimed); the co-op order / 6 cards stay
     const untimed = this.soloUntimed;
-    this.sp = { ...draft, order, idx: 0, picks: {}, taken: {}, untimed, turnDeadline: 0 };
+    this.sp = {
+      ...draft, order, idx: 0, picks: {}, taken: {},
+      skipsLeft: Object.fromEntries(order.map((pid) => [pid, this.isSolo ? 0 : 1])),
+      untimed, turnDeadline: 0,
+    };
+    if (draft.family === 'bounty') for (const ps of alive) this.markPrivate(ps);
     this.setDeadline(0);
     this.startSpTurn();
     this.markPublic();
@@ -1557,6 +1563,22 @@ export class Match {
     if (!Number.isInteger(idx) || idx < 0 || idx >= this.sp.cards.length) return fail(ERR.BAD_TARGET);
     if (this.sp.taken[idx] != null) return fail(ERR.SOLD_OUT);
     this._applyCard(ps, idx);
+    return OK;
+  }
+
+  skipSp(ps) {
+    if (this.phase !== PHASE.SP_DRAFT || !this.sp) return fail(ERR.WRONG_PHASE);
+    const s = this.sp;
+    if (this.isSolo) return fail(ERR.WRONG_PHASE, 'no skip in solo');
+    if (!ps.alive) return fail(ERR.ELIMINATED);
+    if (s.picks[ps.playerId] != null) return fail(ERR.ALREADY);
+    if (this.spTurn() !== ps.playerId) return fail(ERR.NOT_YOUR_TURN);
+    if (!(s.skipsLeft?.[ps.playerId] > 0)) return fail(ERR.ALREADY, 'no skip left');
+    if (s.order.length - s.idx <= 1) return fail(ERR.BAD_TARGET, 'nobody to pass to');
+    s.skipsLeft[ps.playerId]--;
+    s.order.splice(s.idx, 1);
+    s.order.push(ps.playerId);
+    this.startSpTurn();
     return OK;
   }
 

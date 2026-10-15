@@ -162,6 +162,52 @@ test('机变 (co-op): 6 shared cards, random order, 30 s first / 16 s others, ti
   m2.dispose();
 });
 
+test('bounty draft shows this round enemy preview and allows each co-op player to pass once', () => {
+  const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 3, seed: 1, fake: true }).start();
+  const m = h.m;
+  h.drive(() => m.phase === PHASE.ROUND_START && m.round === 3);
+  h.run(() => m.phase === PHASE.SP_DRAFT);
+  assert.equal(m.sp.family, 'bounty');
+  const [first, second, third] = m.sp.order;
+  assert.deepEqual(h.lastTo(first, 'm.private').nextEnemies, m.nextEnemiesFor(h.ps(first)), 'private preview is refreshed for this round');
+  assert.deepEqual(m.handle(second, { t: 'g.choiceSkip' }).error, ERR.NOT_YOUR_TURN);
+  assert.deepEqual(m.handle(first, { t: 'g.choiceSkip' }), { ok: true });
+  assert.deepEqual(m.sp.order, [second, third, first]);
+  assert.equal(m.spTurn(), second);
+  assert.equal(m.publicView().sp.skipsLeft[first], 0);
+  assert.deepEqual(m.handle(first, { t: 'g.choiceSkip' }).error, ERR.NOT_YOUR_TURN);
+  assert.deepEqual(m.handle(second, { t: 'g.choiceSkip' }), { ok: true });
+  assert.equal(m.spTurn(), third);
+  const orderAfterPasses = m.sp.order;
+  const idxAfterPasses = m.sp.idx;
+  m.sp.order = [first, second, third];
+  m.sp.idx = 2;
+  m.sp.skipsLeft[third] = 1;
+  assert.deepEqual(m.handle(third, { t: 'g.choiceSkip' }).error, ERR.BAD_TARGET, 'last player cannot pass');
+  m.sp.order = orderAfterPasses;
+  m.sp.idx = idxAfterPasses;
+  const available = m.sp.cards.find((c) => m.sp.taken[c.idx] == null).idx;
+  assert.deepEqual(m.handle(third, { t: 'g.choice', idx: available }), { ok: true });
+  assert.deepEqual(m.handle(first, { t: 'g.choiceSkip' }).error, ERR.ALREADY, 'used skip cannot be repeated');
+  m.dispose();
+});
+
+test('non-bounty co-op machine draft also allows one pass per player', () => {
+  const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 3, seed: 2, fake: true }).start();
+  const m = h.m;
+  h.drive(() => m.phase === PHASE.ROUND_START && m.round === 3);
+  h.run(() => m.phase === PHASE.SP_DRAFT);
+  assert.equal(m.sp.family, 'supply');
+  const [first, second] = m.sp.order;
+  const originalOrder = m.sp.order.slice();
+  assert.equal(m.sp.skipsLeft[first], 1);
+  assert.deepEqual(m.handle(first, { t: 'g.choiceSkip' }), { ok: true });
+  assert.deepEqual(m.sp.order, [...originalOrder.slice(1), first]);
+  assert.equal(m.spTurn(), second);
+  assert.equal(m.publicView().sp.skipsLeft[first], 0);
+  m.dispose();
+});
+
 test('机变 (solo): 3 cards, untimed; supply/shop cards give the item, bounty cards add enemies to the next battle', () => {
   // solo NORMAL: R6 道具补给, R9 战术决策
   const h = makeMatch({ mode: 'solo', difficulty: 'NORMAL', seed: 3, fake: true }).start();

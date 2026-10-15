@@ -1351,6 +1351,7 @@ export function normalizeSp(sp, players = []) {
     name: typeof sp.name === 'string' && sp.name ? sp.name : null,
     desc: typeof sp.desc === 'string' && sp.desc ? sp.desc : null,
     untimed: !!sp.untimed,
+    skipsLeft: new Map(Object.entries(isObj(sp.skipsLeft) ? sp.skipsLeft : {}).map(([pid, n]) => [pid, Number.isFinite(n) ? n : 0])),
     cards, order, turnPid, pickOf, takenBy, pickedCount: pickOf.size,
   };
 }

@@ -10,7 +10,7 @@ import { audio } from '../audio.js';
 const SUCCESS_SFX = {
   'g.buy': 'buy', 'g.sell': 'sell', 'g.refresh': 'refresh', 'g.freeze': 'freeze', 'g.levelUp': 'levelup',
   'g.move': 'drop', 'g.equip': 'equip', 'g.art': 'artPlace', 'g.reward': 'pick', 'g.choice': 'pick',
-  'g.band': 'confirm', 'g.bandSkip': 'back', 'g.infoReady': 'ready', 'g.emote': 'emote', 'g.destroy': 'back',
+  'g.band': 'confirm', 'g.bandSkip': 'back', 'g.choiceSkip': 'back', 'g.infoReady': 'ready', 'g.emote': 'emote', 'g.destroy': 'back',
 };
 
 let inflight = 0;
@@ -65,6 +65,7 @@ export const actions = {
   destroy: (uid) => act('g.destroy', { uid }),
   reward: (idx) => act('g.reward', { idx }),
   choice: (idx) => act('g.choice', { idx }),
+  choiceSkip: () => act('g.choiceSkip'),
   ready: (ready) => act('g.ready', { ready }, { sfx: ready ? 'ready' : 'back' }),
   emote: (id) => act('g.emote', { id }, { quiet: true }),
   watch: (fieldId) => act('g.watch', { fieldId }, { sfx: 'tab' }),

@@ -366,6 +366,8 @@ button.bpop__harmony:hover { border-style: solid; color: #fff; }
 /* ---- 机变 overlay ---- */
 .spov { position: absolute; inset: 0 0 0 2.8rem; z-index: 20; }
 .gm.has-sp .gm__bonds, .gm.has-sp .gm__effects { opacity: 0; pointer-events: none; transition: opacity var(--t-med); }
+.gm.has-sp .edrawer { z-index: 21; }
+.gm.has-sp .dpanel { z-index: 22; }
 .spov__veil { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(4, 7, 6, .6) 0, rgba(4, 7, 6, .9) .5rem, rgba(4, 7, 6, .92)); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); border-left: 1px solid var(--line); }
 .spov__inner { position: absolute; left: .3rem; right: .5rem; top: 1.14rem; bottom: .5rem; display: flex; flex-direction: column; gap: .16rem; animation: screen-in var(--t-slow) var(--ease-out); }
 .spov__head { display: flex; align-items: flex-end; justify-content: space-between; gap: .3rem; }

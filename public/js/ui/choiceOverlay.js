@@ -122,7 +122,7 @@ export function armedCard(armed, sp, o) {
 
 /**
  * The overlay: keeps the two-tap selection and renders ChoiceView. `onPick(idx)` sends the confirmed card (g.choice).
- * @param {{ pub:any, sp:any, myId:string, solo:boolean, onPick:(idx:number)=>void, busyIdx?:number|null, total?:number|null }} props
+ * @param {{ pub:any, sp:any, myId:string, solo:boolean, onPick:(idx:number)=>void, onSkip?:()=>void, onShowEnemies?:()=>void, busyIdx?:number|null, total?:number|null }} props
  */
 export function ChoiceOverlay(props) {
   const { sp, myId, solo, busyIdx = null, onPick } = props;
@@ -149,10 +149,10 @@ export function ChoiceOverlay(props) {
 
 /**
  * The overlay's view (pure: no hooks — test/ui renders it as a function).
- * @param {{ pub:any, sp:any, myId:string, solo:boolean, busyIdx?:number|null, total?:number|null, armed?:number|null,
+ * @param {{ pub:any, sp:any, myId:string, solo:boolean, busyIdx?:number|null, total?:number|null, armed?:number|null, onSkip?:()=>void, onShowEnemies?:()=>void,
  *   onTap?:(idx:number)=>void, onConfirm?:()=>void, onDisarm?:()=>void }} props
  */
-export function ChoiceView({ pub, sp, myId, solo, busyIdx = null, total = null, armed = null, onTap = () => {}, onConfirm = () => {}, onDisarm = () => {} }) {
+export function ChoiceView({ pub, sp, myId, solo, busyIdx = null, total = null, armed = null, onSkip = () => {}, onShowEnemies = () => {}, onTap = () => {}, onConfirm = () => {}, onDisarm = () => {} }) {
   if (!sp) return null;
   const fam = data.get('choices')?.families?.[sp.family] || null;
   const players = new Map(sortedPlayers(pub).map((p) => [p.playerId, p]));
@@ -162,6 +162,7 @@ export function ChoiceView({ pub, sp, myId, solo, busyIdx = null, total = null, 
   const special = /_s$/.test(String(sp.family || ''));
   const order = solo ? [] : sp.order;
   const timed = !solo && !sp.untimed;
+  const canSkip = !solo && myTurn && mine == null && sp.skipsLeft?.get(myId) > 0 && sp.order.length > sp.order.indexOf(myId) + 1 && busyIdx == null;
   const armedCardRec = armed != null ? sp.cards.find((c) => c && c.idx === armed) : null;
   const armedName = armedCardRec ? resolveSpCard(armedCardRec, sp.family).name : null;
   // a press anywhere but a card or the confirm button drops the selection
@@ -186,6 +187,8 @@ export function ChoiceView({ pub, sp, myId, solo, busyIdx = null, total = null, 
             : html`<span class="spov__turntxt">${turnName} 正在决策…<${Icon} name="hourglass" /></span>`}
           ${armed != null ? html`<${Button} variant="primary" size="lg" icon="check" class="spov__confirm" data-testid="sp-confirm"
               title=${armedName ? `确认选择「${armedName}」（再次点击卡牌亦可）` : '确认选择'} onClick=${onConfirm}>确认选择<//>` : null}
+          ${sp.family === 'bounty' ? html`<${Button} variant="secondary" size="lg" icon="search" data-testid="sp-enemies" onClick=${onShowEnemies}>本轮敌人<//>` : null}
+          ${canSkip ? html`<${Button} variant="secondary" size="lg" icon="chevrons" data-testid="sp-skip" onClick=${onSkip}>跳过本轮<//>` : null}
           ${timed ? html`<${Countdown} deadline=${pub?.deadline} total=${total ?? undefined} size="sm" />` : null}
         </div>
       </header>
