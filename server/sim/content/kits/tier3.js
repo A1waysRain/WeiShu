@@ -578,6 +578,10 @@ const KITS = {
           battle.on('skillStart', (ctx) => { if (ctx.unit === unit && unit.skill?.kind !== 'passive') addCoins(battle, unit, num(t0.sp, 1)); }, { owner: unit });
         } },
         { install(battle, unit) { // 破财消灾
+          // The escalating rescue cost lasts for this deployment only.
+          battle.on('deploy', (ctx) => {
+            if (ctx.unit === unit) unit.mem.saveCount = 0;
+          }, { owner: unit });
           battle.on('fatal', (ctx) => {
             if (ctx.unit !== unit || ctx.prevented) return;
             const n = unit.mem.saveCount ?? 0;

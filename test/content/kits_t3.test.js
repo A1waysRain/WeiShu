@@ -147,6 +147,37 @@ test('3_04 琳琅诗怀雅: coins → champagne bomb (ATK% + 停顿), 大买家 
   done(h);
 });
 
+test('3_04 琳琅诗怀雅: automatic redeployment resets rescue cost after insufficient DP, normal and elite', () => {
+  for (const id of ['chess_char_3_04_a', 'chess_char_3_04_b']) {
+    const h = makeBattle({ units: [{ chessId: id, row: 9, col: 5 }], enemies: [], autoFinish: false, timeLimit: 180 });
+    const u = h.unit(id), p = h.b.getPlayer('p1');
+    const base = Math.abs(TB(id, 1).cost), multiplier = TB(id, 1).cost_multi;
+    h.step();
+    const hit = () => h.b.dealDamage(null, u, { type: 'true', amount: 1e9 });
+    const rescue = (cost) => {
+      p.dp = 100;
+      hit();
+      assert.equal(u.alive, true);
+      approx(p.dp, 100 - cost, 1e-6, `${id}: rescue cost`);
+    };
+    for (let deployment = 0; deployment < 2; deployment++) {
+      for (let i = 0; i < 3; i++) rescue(base * multiplier ** i);
+      p.dp = base * multiplier ** 3 - 1;
+      const before = p.dp;
+      hit();
+      assert.equal(u.alive, false, 'insufficient DP causes a knockdown');
+      approx(p.dp, before, 1e-6, 'failed rescue does not spend DP');
+      const deadline = u.respawnAt;
+      p.dp = 100;
+      assert.ok(h.runUntil(() => u.alive, 60), 'automatically redeploys after countdown');
+      assert.ok(h.b.time >= deadline - 1e-9, 'waits for the redeploy countdown');
+    }
+    rescue(base);
+    rescue(base * multiplier);
+    done(h);
+  }
+});
+
 test('3_05 斯卡蒂: 涌潮悲歌 ATK/DEF/HP; 深海掠食者 on Abyssal Hunters only; 迅捷出击 redeploy; 精锐 module revive', () => {
   const id = 'chess_char_3_05_a', bb = BB(id), t0 = TB(id, 0), t1 = TB(id, 1);
   const h = makeBattle({
