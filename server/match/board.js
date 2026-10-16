@@ -138,15 +138,15 @@ export function buildDeployMap(stage, { deviceOverrides = {}, tileOverrides = {}
  * may stand on ranged (高台) tiles, regardless of module (shared/highGround.js).
  * Every other MELEE record stays 'melee'. `chess.json` has no `placement` field.
  * @param {object|null} rec
- * @param {string|null} [moduleId] equipped module; ignored for tokens and non-golden records
+ * @param {string|null} [moduleId] retained for callers; placement no longer depends on it (§23.40)
  */
 export function positionClass(rec, moduleId = null) {
   return meleeOnHighGround(rec, moduleId) ? 'all' : basePositionClass(rec);
 }
 
 /**
- * Placement class of a record under a player's loadout (the module `ps.loadoutFor` resolves, defaults included).
- * Tokens and records without a chess id ignore the loadout.
+ * Placement class of a record under a player's loadout (`ps.loadoutFor` still resolves the module, but since §23.40
+ * nothing reads it). Tokens and records without a chess id ignore the loadout.
  * @param {{ loadoutFor?: (rec: object) => { moduleId?: string|null }|null }|null} ps
  */
 export function placeClass(ps, rec) {
