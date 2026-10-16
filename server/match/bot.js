@@ -949,7 +949,7 @@ export function* planLayoutSteps(m, ps, pieces, params = LAYOUT_PARAMS, { occupi
     let bestV = -Infinity;
     // a "只能部署在召唤者攻击范围内" summon (伺夜's 狼群, 缪尔赛思's 流形): only the tiles of its owner's range
     const within = p.kind === 'token' && typeof ps.summonRange === 'function' ? ps.summonRange(p) : null;
-    // ground tiles for a MELEE blocker. placeClass 'all' is only elite 歌蕾蒂娅 + HOK-Y: she may stand on a 高台,
+    // ground tiles for a MELEE blocker. placeClass 'all' includes every 歌蕾蒂娅 variant: she may stand on a 高台,
     // and when one of those tiles covers the enemy road she is planned there (owner 2026-10-04: the bot uses the 高台).
     const cls = p.kind === 'token' ? basePositionClass(r0) : placeClass(ps, m.gd.chess(p.id) || r0);
     const preferHigh = cls === 'all' && basePositionClass(r0) === 'melee';
