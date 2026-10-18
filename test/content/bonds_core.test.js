@@ -86,6 +86,32 @@ test('炎 6 / 9: one / two 炎佑 with their template stats + 30 % of the real �
 // ---------------------------------------------------------------------------------------------------------------------
 // 萨尔贡
 
+test('炎佑 in unite: equipment stats are inherited from its owner’s 炎 operators only', () => {
+  const ids = Array.from({ length: 6 }, (_, i) => `yan${i}_a`);
+  const defs = defsOf(ids.map((id) => [id, ['yanShip']]));
+  const run = (ownerItems, partnerItems) => {
+    const h = makeBattle({
+      kind: 'unite', defs, autoFinish: false,
+      players: [
+        { playerId: 'p1', seat: 0, side: 'L', colOffset: 0,
+          units: lineup(ids, { items: { 0: ownerItems } }).map((u, i) => ({ ...u, uid: `a${i}` })),
+          bonds: { yanShip: bondOn(6) } },
+        { playerId: 'p2', seat: 1, side: 'L', colOffset: 8,
+          units: [{ uid: 'b0', chessId: ids[0], row: 10, col: 3, items: partnerItems }], bonds: {} },
+      ],
+    });
+    h.step();
+    const y = h.b.allyUnits.find((u) => u.defId === TOKEN_IDS.yanyou);
+    assert.ok(y && y.ownerId === 'p1');
+    checkInvariants(h.b);
+    return { atk: y.s.atk, hp: y.s.maxHp };
+  };
+  const base = run([], []);
+  const solvent = ['chess_item_1_05_e_a'];
+  assert.deepEqual(run([], solvent), base, 'partner equipment must not enter inherited stats, even on a 炎 operator');
+  assert.ok(run(solvent, []).atk > base.atk, 'owner equipment contributes to inherited attack');
+});
+
 const sargonDefs = (n) => {
   const list = [];
   for (let i = 0; i < n; i++) list.push([`s${i}_a`, ['sargonShip'], { skill: { duration: 1000, spCost: 10, initSp: 0 } }]);

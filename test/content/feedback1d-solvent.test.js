@@ -20,6 +20,7 @@ const SOLVENT = 'chess_item_1_05_e_a', SOLVENT_B = 'chess_item_1_05_e_b';
 const MIXER = 'chess_char_4_01_a', MOSTIMA = 'chess_char_4_02_a', INSIDE = 'chess_char_1_01_a', YAK = 'chess_char_1_02_a';
 const gold = (id) => id.replace(/_a$/, '_b');
 const DRAIN = DATA.items[SOLVENT].params.damage; // 60
+const YAN = 'chess_char_1_03_a', YAN_OTHER = 'chess_char_2_04_a';
 const isMixer = (u) => !!u && u.defId.startsWith('chess_char_4_01_');
 const approx = (a, b, eps = 1e-6, msg = '') => assert.ok(Math.abs(a - b) <= eps * Math.max(1, Math.abs(b)), `${msg} ${a} ≈ ${b}`);
 const dummy = (o = {}) => enemyRec({ key: 'enemy_dummy', hp: 1e8, atk: 0, speed: 0, ...o });
@@ -348,8 +349,8 @@ test('源石溶剂 also drains every 敌人类我方单位 on the field (炎佑)
   // PRTS 盟约记录 源石溶剂 备注: "携带后，全场范围内的所有敌人类我方单位也会获得此装备的“每秒受到60真实伤害”效果（该效果的付与为
   // 我方阵营索敌，可对空，无视目标可选性）"; one effect per unit (PRTS 作战机制 "同名buff的默认叠加策略buff只能表现出一个")
   for (const carriers of [1, 2]) {
-    const units = [{ chessId: YAK, row: 10, col: 4, items: [SOLVENT], skillIndex: 1 }];
-    if (carriers > 1) units.push({ chessId: INSIDE, row: 11, col: 4, items: [SOLVENT_B] });
+    const units = [{ chessId: YAN, row: 10, col: 4, items: [SOLVENT] }];
+    if (carriers > 1) units.push({ chessId: YAN_OTHER, row: 11, col: 4, items: [SOLVENT_B] });
     const h = makeBattle({ units, timeLimit: 60, hooks: ['damaged'], captureNoisy: true, autoFinish: false });
     h.step();
     const [y] = spawnYanyou(h.b, 'p1', { atk: 400, hp: 5000 });
@@ -373,7 +374,7 @@ test('源石溶剂 also drains every 敌人类我方单位 on the field (炎佑)
     assert.equal(h.b.errorCount, 0, JSON.stringify(h.b.errors));
   }
   // the 9-炎 炎佑 (受到的伤害 ×0.1) takes a tenth of it: a damage instance, damage-taken modifiers apply
-  const h = makeBattle({ units: [{ chessId: YAK, row: 10, col: 4, items: [SOLVENT], skillIndex: 1 }], timeLimit: 60, hooks: [], autoFinish: false });
+  const h = makeBattle({ units: [{ chessId: YAN, row: 10, col: 4, items: [SOLVENT] }], timeLimit: 60, hooks: [], autoFinish: false });
   h.step();
   const [y] = spawnYanyou(h.b, 'p1', { atk: 400, hp: 5000, dmgTakenMul: 0.1 });
   const hp0 = y.hp;
@@ -381,19 +382,26 @@ test('源石溶剂 also drains every 敌人类我方单位 on the field (炎佑)
   approx(hp0 - y.hp, DRAIN * 0.1, 1e-9);
 });
 
-test('a co-op field: a carrier drains the partner\'s 炎佑 too ("全场范围内…我方单位")', () => {
+for (const kind of ['unite', 'boss']) test(`${kind}: 源石溶剂 drains only its owner's 炎佑, never the partner's`, () => {
   const h = makeBattle({
-    kind: 'boss', autoFinish: false, timeLimit: 60, hooks: ['damaged'], captureNoisy: true,
+    kind, autoFinish: false, timeLimit: 60, hooks: ['damaged'], captureNoisy: true,
     players: [
-      { playerId: 'p1', seat: 0, side: 'L', colOffset: 0, units: [{ uid: 1, kind: 'chess', chessId: YAK, row: 12, col: 3, items: [SOLVENT], skillIndex: 1 }], bonds: {} },
+      { playerId: 'p1', seat: 0, side: 'L', colOffset: 0, units: [{ uid: 1, kind: 'chess', chessId: YAN, row: 12, col: 3, items: [SOLVENT] }], bonds: {} },
       { playerId: 'p2', seat: 1, side: 'R', colOffset: 0, units: [], bonds: {} },
     ],
   });
   h.step();
   const [y] = spawnYanyou(h.b, 'p2', { atk: 400, hp: 5000 });
+  const [own] = spawnYanyou(h.b, 'p1', { atk: 400, hp: 5000 });
   assert.ok(y && y.ownerId === 'p2');
+  assert.ok(own && own.ownerId === 'p1');
+  const hp = y.hp;
+  const ownHp = own.hp;
   h.run(2.02);
-  assert.equal(h.hooksOf('damaged').filter((c) => c.target === y).length, 2);
+  assert.equal(h.hooksOf('damaged').filter((c) => c.target === y).length, 0);
+  assert.equal(y.hp, hp, 'partner equipment causes no HP loss');
+  assert.equal(h.hooksOf('damaged').filter((c) => c.target === own).length, 2);
+  approx(ownHp - own.hp, DRAIN * 2, 1e-9, 'own equipment still drains once per second');
 });
 
 test('self / friendly damage is not damage dealt: the 源石溶剂 carrier\'s own drain counts as taken, never as its dmg or the player\'s damageDealt; the kill stays its own', () => {
@@ -405,7 +413,7 @@ test('self / friendly damage is not damage dealt: the 源石溶剂 carrier\'s ow
   h.run(3.02);
   approx(u.stats.taken, 3 * DRAIN, 1e-9, 'taken');
   assert.equal(u.stats.dmg, 0, 'its own drain is not damage it dealt');
-  approx(y.stats.taken, 3 * DRAIN, 1e-9);
+  approx(y.stats.taken, 0, 1e-9, 'non-炎 carrier does not drain 炎佑');
   // an operator's own 流失 (Battle.loseHp with itself as the source) likewise
   h.b.loseHp(u, 100, { source: u });
   assert.equal(u.stats.dmg, 0);

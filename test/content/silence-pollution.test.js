@@ -43,7 +43,7 @@ for (const source of sources) for (const grade of ['a', 'b']) {
 for (const grade of ['a', 'b']) for (const key of ['enemy_1267_nhpbr', 'enemy_1267_nhpbr_2']) {
   test(`奥术法阵 (${grade}) also grants 炎佑 silence against ${key}`, () => {
     const h = makeBattle({ autoFinish: false, timeLimit: 30,
-      units: [{ chessId: 'chess_char_1_01_a', row: 10, col: 4, items: [`chess_item_3_08_e_${grade}`] }],
+      units: [{ chessId: 'chess_char_1_03_a', row: 10, col: 4, items: [`chess_item_3_08_e_${grade}`] }],
       enemies: [{ key, pos: [10, 5], mods: { speedMul: 0 } }],
     });
     h.step();

@@ -65,6 +65,10 @@ const procTags = (k) => ['item', `item:${k}`];
 const chance = (battle, p) => p > 0 && (p >= 1 || battle.rng() < p);
 /** An ally built from an enemy record — PRTS's 敌人类我方单位 (炎佑 enemy_9012_acloon). */
 const ENEMY_RECORD = /^enemy_/;
+/** 炎佑 only collects equipment effects from its owner's actual 炎 operators, matching its stat inheritance. */
+function sharesYanEquipment(carrier, target) {
+  return carrier.ownerId === target.ownerId && unitBonds(carrier).includes('yanShip');
+}
 /** 'fatal' priorities (see header). */
 export const PRIO_REVIVE = -100;
 /** A running 坚固 window (不死 held): before a 傀儡师's switch to its 替身 at −100 — see header. */
@@ -371,8 +375,10 @@ const BY_BUFF = {
   // SP, the 重装 TAKE_DAMAGE trigger and 信仰搅拌机 S3's counters (player report D1). 无来源: hooks see no source; the carrier
   // keeps the credit (a carrier the drain finishes off is its own kill, as before). May kill.
   // The same 备注: "携带后，全场范围内的所有敌人类我方单位也会获得此装备的“每秒受到60真实伤害”效果（该效果的付与为我方阵营索敌，
-  // 可对空，无视目标可选性）" — every enemy-record unit on our side of the whole field (炎佑 enemy_9012_acloon, a partner's
-  // too; flying, 孤立) takes the same tick, credited to nobody, while a carrier is on the field [ASSUMED: it ends with its
+  // 可对空，无视目标可选性）" — enemy-record allies owned by the carrier's player (炎佑 enemy_9012_acloon;
+  // flying, 孤立) take the same tick, credited to nobody, only from that player's actual 炎 operators.
+  // Non-炎 carriers (including 调和 alone) and other players do not contribute.
+  // The effect applies while a carrier is on the field [ASSUMED: it ends with its
   // carriers]; one effect per unit however many carriers (PRTS 作战机制 "同名buff的默认叠加策略buff只能表现出一个").
   periodic_damage(battle, u, p, S) {
     const d = num(p.damage);
@@ -381,7 +387,7 @@ const BY_BUFF = {
       if (!unit.deployed) return;
       battle.dealDamage(unit, unit, periodicDamage(d));
       for (const a of battle.allies()) {
-        if (a === unit || !ENEMY_RECORD.test(a.defId ?? '') || battle.time - (a.mem.solventAt ?? -Infinity) < 1 - 1e-6) continue;
+        if (a === unit || !sharesYanEquipment(unit, a) || !ENEMY_RECORD.test(a.defId ?? '') || battle.time - (a.mem.solventAt ?? -Infinity) < 1 - 1e-6) continue;
         a.mem.solventAt = battle.time;
         battle.dealDamage(null, a, periodicDamage(d));
       }
@@ -389,7 +395,7 @@ const BY_BUFF = {
   },
   // 奥术法阵: 攻击使目标失去特殊能力 silence s. PRTS 盟约记录 备注 (as 源石溶剂's): "携带后，全场范围内的所有敌人类我方单位也会获得
   // 此装备的“造成伤害时使目标失去特殊能力5秒”效果（该效果的付与为我方阵营索敌，可对空，无视目标可选性）" — the damage of every
-  // enemy-record unit on our side (炎佑, a partner's too) silences its target while a carrier is on the field [ASSUMED: it
+  // enemy-record unit on our side (炎佑) silences its target while an actual 炎 carrier of the same player is on the field [ASSUMED: it
   // ends with its carriers]; one effect per damage instance however many carriers.
   silence_attachment(battle, u, p, S) {
     const d = num(p.silence);
@@ -397,7 +403,7 @@ const BY_BUFF = {
     onAttackEnemies(S, u, (t) => battle.applyStatus(t, 'silence', { duration: d, source: u }));
     S.on('damaged', (c) => {
       const a = c.source, t = c.target;
-      if (!a || a === u || a.side !== 'ally' || !ENEMY_RECORD.test(a.defId ?? '') || !t || t.side !== 'enemy' || !t.alive || !onField(u)) return;
+      if (!a || a === u || a.side !== 'ally' || !sharesYanEquipment(u, a) || !ENEMY_RECORD.test(a.defId ?? '') || !t || t.side !== 'enemy' || !t.alive || !onField(u)) return;
       if (c.type === 'element') return; // an element 损伤 (the gauge) is no damage instance
       if (c.dmg) { if (c.dmg.arcaneSilence) return; c.dmg.arcaneSilence = true; }
       battle.applyStatus(t, 'silence', { duration: d, source: a });
