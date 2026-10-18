@@ -21,6 +21,7 @@
 
 import { useEffect, useRef, useState } from '../../vendor/hooks.module.js';
 import { EMOTE_THEMES, EMOTE_COOLDOWN_MS, EMOTE_BUBBLE_MS, emoteInfo, emoteArtGroup } from '../../../shared/constants.js';
+import { CHAT_MAX_LENGTH, CHAT_COOLDOWN_MS, CHAT_BUBBLE_MS, normalizeChat } from '../../../shared/chat.js';
 import { html } from './components.js';
 import { GIcon } from './gameComponents.js';
 import { data, useData, localAsset, artUrls, nextArtUrl } from '../data.js';
@@ -181,35 +182,56 @@ export function EmoteArt({ id, class: cls }) {
 }
 
 /**
- * Pop bubble (picture only) beside the sender's avatar. Unknown ids show the neutral glyph. Key it by the emote's seq
+ * Pop bubble beside the sender's avatar (plain text when supplied, otherwise a picture). Unknown ids show the neutral glyph. Key it by the event's seq
  * (a newer emote replaces the bubble and pops again).
  * @param {{ id: string, class?: string, ttl?: number, at?: number }} props ttl = display time in ms (fade-out at the
  *   end); at = when the emote arrived (Date.now() clock): a bubble mounted after that resumes its pop / fade timeline
  *   instead of restarting it.
  */
-export function EmoteBubble({ id, class: cls, ttl = EMOTE_BUBBLE_MS, at }) {
+export function EmoteBubble({ id, text, class: cls, ttl = EMOTE_BUBBLE_MS, at }) {
   useData('local');
   useEffect(() => { ensureEmoteCss(); }, []);
-  const life = Math.max(300, Number(ttl) || EMOTE_BUBBLE_MS);
+  const isText = typeof text === 'string';
+  const life = isText ? CHAT_BUBBLE_MS : Math.max(300, Number(ttl) || EMOTE_BUBBLE_MS);
   const [age] = useState(() => bubbleAge(at, Date.now(), life)); // fixed at mount: the CSS animation runs from there
   const bg = emoteUiSprite('emoji_bubble_bkg');
   const e = emoteInfo(id);
   const style = [`--ebubble-ttl:${life}ms`, age && `--ebubble-age:${Math.round(age)}ms`, bg && `--ebubble-bg:url("${bg}")`].filter(Boolean).join(';');
-  return html`<div class=${cx('ebubble', bg && 'has-sprite', cls)} style=${style} role="img"
-    aria-label=${e ? e.label : '表情'} data-emote=${e ? e.id : ''}>
-    <span class="ebubble__icon"><${EmoteArt} id=${id} /></span>
+  return html`<div class=${cx('ebubble', isText && 'ebubble--chat', !isText && bg && 'has-sprite', cls)} style=${style} role=${isText ? 'status' : 'img'}
+    aria-label=${isText ? undefined : e ? e.label : '表情'} data-emote=${e ? e.id : ''}>
+    ${isText ? html`<span class="ebubble__text">${text}</span>` : html`<span class="ebubble__icon"><${EmoteArt} id=${id} /></span>`}
   </div>`;
 }
 
 /**
  * 交流 button + emote panel.
  * @param {{ onSend: (id:string)=>void, open: boolean, onToggle: (open:boolean)=>void, disabled?: boolean,
- *   cooldownMs?: number }} props
+ *   cooldownMs?: number, onChat?: (text:string)=>Promise<boolean> }} props
  */
-export function EmoteWheel({ onSend, open, onToggle, disabled = false, cooldownMs = EMOTE_COOLDOWN_MS }) {
+export function EmoteWheel({ onSend, onChat, open, onToggle, disabled = false, cooldownMs = EMOTE_COOLDOWN_MS }) {
   useData('local');
   useEffect(() => { ensureEmoteCss(); }, []);
   const [page, setPage] = useState(lastThemeIndex);
+  const [mode, setMode] = useState('emote');
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const chatAt = useRef(-Infinity);
+  const composing = useRef(false);
+  const chatBusy = useRef(false);
+  const sendChat = async (e) => {
+    e?.preventDefault();
+    const text = normalizeChat(draft);
+    if (!text || disabled || !onChat || chatBusy.current || composing.current || Date.now() - chatAt.current < CHAT_COOLDOWN_MS) return;
+    chatBusy.current = true;
+    setSending(true);
+    try {
+      if (await onChat(text)) {
+        chatAt.current = Date.now();
+        setDraft('');
+        onToggle(false);
+      }
+    } finally { chatBusy.current = false; setSending(false); }
+  };
   const [dir, setDir] = useState(0);          // direction of the last page change (slide-in animation)
   const [dx, setDx] = useState(0);            // live drag offset (px)
   const [cooling, setCooling] = useState(() => cooldownLeft(lastSentAt, Date.now(), cooldownMs) > 0);
@@ -228,7 +250,10 @@ export function EmoteWheel({ onSend, open, onToggle, disabled = false, cooldownM
   };
 
   // reopen on the last used theme
-  useEffect(() => { if (open) { setPage(lastThemeIndex()); setDir(0); setDx(0); } }, [open]);
+  useEffect(() => {
+    if (open) { setPage(lastThemeIndex()); setDir(0); setDx(0); }
+    else composing.current = false;
+  }, [open]);
 
   // cooldown: the button is greyed for chatCD after a send (from the send time, so a remounted wheel keeps it)
   useEffect(() => {
@@ -312,8 +337,20 @@ export function EmoteWheel({ onSend, open, onToggle, disabled = false, cooldownM
       aria-expanded=${open ? 'true' : 'false'} aria-haspopup="dialog" disabled=${disabled || cooling}>
       ${btnSprite ? null : html`<${GIcon} name="emote" />`}<span class="ewheel__label">交流</span>
     </button>
-    ${open ? html`<div class=${cx('ewheel__panel', panelBg && 'has-sprite', cellBg && 'has-cell')} style=${panelStyle} role="dialog" aria-label="交流">
-      <div class="ewheel__viewport" onPointerDown=${onPointerDown} onPointerMove=${onPointerMove}
+    ${open ? html`<div class=${cx('ewheel__panel', mode === 'text' && 'echat', mode !== 'text' && panelBg && 'has-sprite', cellBg && 'has-cell')} style=${panelStyle} role="dialog" aria-label="交流">
+      ${onChat ? html`<div class="echat__tabs" role="tablist" aria-label="交流方式">
+        <button type="button" role="tab" aria-selected=${mode === 'emote'} onClick=${() => setMode('emote')}>表情</button>
+        <button type="button" role="tab" aria-selected=${mode === 'text'} onClick=${() => setMode('text')}>文字</button>
+      </div>` : null}
+      ${mode === 'text' ? html`<form class="echat__form" onSubmit=${sendChat}>
+        <label for="match-chat">发送给全体队友</label>
+        <input id="match-chat" type="text" value=${draft} maxlength=${CHAT_MAX_LENGTH} placeholder="输入消息…" autocomplete="off"
+          aria-label="聊天消息" disabled=${disabled || sending} onInput=${(e) => setDraft(e.currentTarget.value)}
+          onCompositionStart=${() => { composing.current = true; }} onCompositionEnd=${() => { composing.current = false; }}
+          onKeyDown=${(e) => { if (e.key === 'Enter' && (e.isComposing || composing.current || e.keyCode === 229)) e.preventDefault(); }} />
+        <div class="echat__footer"><span>${draft.length}/${CHAT_MAX_LENGTH}</span>
+          <button type="submit" disabled=${disabled || sending || !normalizeChat(draft)}>${sending ? '发送中…' : '发送'}</button></div>
+      </form>` : html`<div class="ewheel__viewport" onPointerDown=${onPointerDown} onPointerMove=${onPointerMove}
         onPointerUp=${(e) => endDrag(e, false)} onPointerCancel=${(e) => endDrag(e, true)} onWheel=${onWheel}>
         <div key=${theme.themeId} class=${cx('ewheel__page', dir > 0 && 'is-from-right', dir < 0 && 'is-from-left', dx !== 0 && 'is-dragging')}
           style=${dx ? `transform:translateX(${dx}px)` : ''} role="group" aria-label=${theme.name} data-theme=${theme.themeId}>
@@ -329,6 +366,7 @@ export function EmoteWheel({ onSend, open, onToggle, disabled = false, cooldownM
         ${EMOTE_THEMES.map((t, i) => html`<button key=${t.themeId} type="button" role="tab" class=${cx('ewheel__dot', i === page && 'is-on')}
           aria-selected=${i === page ? 'true' : 'false'} aria-label=${`${t.name} ${i + 1}/${EMOTE_THEMES.length}`} onClick=${() => go(i)}></button>`)}
       </div>
+      `}
     </div>` : null}
   </div>`;
 }

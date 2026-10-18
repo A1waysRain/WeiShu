@@ -84,7 +84,7 @@ export function TeamPanel({ pub, myId, watching, bubbles, onWatch, compact = fal
     if (!t.fieldId) { setOpenPid(null); onWatch(p); return; } // the game screen toasts the reason
     setOpenPid((cur) => (cur === p.playerId ? null : p.playerId));
   };
-  return html`<aside class=${cx('team', compact && 'team--compact', players.length > 4 && 'team--scroll')} aria-label="同盟成员">
+  return html`<aside class=${cx('team', compact && 'team--compact', players.length > 4 && 'team--scroll', players.some((p) => typeof bubbles?.get(p.playerId)?.text === 'string') && 'team--chat')} aria-label="同盟成员">
     ${players.map((p) => {
       const self = p.playerId === myId;
       const status = p.alive === false ? 'dead' : p.status;
@@ -123,7 +123,7 @@ export function TeamPanel({ pub, myId, watching, bubbles, onWatch, compact = fal
           ${back ? html`<button type="button" class="btn btn--secondary btn--sm team__back"
             onClick=${() => observe.onBack()}><span class="btn__label">返回战场</span></button>` : null}
         </div>
-        ${bubble ? html`<${EmoteBubble} key=${bubble.seq} id=${bubble.id} at=${bubble.at} class="team__bubble" />` : null}
+        ${bubble ? html`<${EmoteBubble} key=${bubble.seq} id=${bubble.id} text=${bubble.text} at=${bubble.at} class="team__bubble" />` : null}
       </div>`;
     })}
   </aside>`;

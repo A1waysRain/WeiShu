@@ -22,6 +22,7 @@
 //   (research 09 §1.2); board drops of units go through the wheel before g.move {uid, to, dir} (ui/facing.js).
 
 import { GEO, PHASE, UF, MAX_TEN_PLAYER_SEATS } from '../../../shared/constants.js';
+import { CHAT_BUBBLE_MS } from '../../../shared/chat.js';
 import { resolveLoadout, loadoutOptions, MODULE_NONE } from '../../../shared/protocol.js';
 import { resolveRecordLoadout, loadoutRecord, attackRangeGrid } from '../../../shared/loadoutRecord.js';
 import { meleeOnHighGround } from '../../../shared/highGround.js';
@@ -358,10 +359,11 @@ export function fieldLabel(field, pub, myId) {
 export function activeBubbles(emotes, now, ttl = 3000) {
   const out = new Map();
   for (const e of Array.isArray(emotes) ? emotes : []) {
-    if (!isObj(e) || !(now - e.at < ttl) || e.at > now + 1000) continue;
+    if (!isObj(e) || e.at > now + 1000) continue;
     const cur = out.get(e.playerId);
-    if (!cur || cur.seq < e.seq) out.set(e.playerId, { id: e.id, seq: e.seq, at: e.at });
+    if (!cur || cur.seq < e.seq) out.set(e.playerId, { id: e.id, seq: e.seq, at: e.at, ...(typeof e.text === 'string' ? { text: e.text } : {}) });
   }
+  for (const [pid, e] of out) if (!(now - e.at < (typeof e.text === 'string' ? CHAT_BUBBLE_MS : ttl))) out.delete(pid);
   return out;
 }
 

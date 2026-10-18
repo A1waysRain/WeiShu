@@ -131,6 +131,7 @@
 
 import { C2S, unitStatsEntry } from '../../shared/protocol.js';
 import { PHASE, ERR, EMOTES, EMOTE_COOLDOWN_MS, GEO, modeIdFor, layerGainRoom } from '../../shared/constants.js';
+import { validChat, normalizeChat, CHAT_COOLDOWN_MS } from '../../shared/chat.js';
 import { Battle } from '../sim/Battle.js';
 import { DataSource } from '../sim/simdata.js';
 import { createRng, deriveSeed } from '../sim/rng.js';
@@ -1048,6 +1049,7 @@ export class Match {
       case 'g.choiceSkip': return this.skipSp(ps);
       case 'g.ready': return ps.setReady(!!msg.ready);
       case 'g.emote': return this.emote(ps, msg.id);
+      case 'g.chat': return this.chat(ps, msg.text);
       case 'g.watch': return this.watch(ps, msg.fieldId);
       case 'g.autoplay': return this.setAutoplay(ps, !!msg.on);
       case 'g.pause': return this.setPause(ps, !!msg.on);
@@ -1058,6 +1060,15 @@ export class Match {
       case 'b.result': return this._onResult(ps, msg);
       default: return fail(ERR.BAD_MSG);
     }
+  }
+
+  chat(ps, text) {
+    if (!validChat(text)) return fail(ERR.BAD_MSG, 'invalid chat text');
+    const now = this.sched.now();
+    if (now - (ps.lastChatAt ?? -Infinity) < CHAT_COOLDOWN_MS) return fail(ERR.RATE);
+    ps.lastChatAt = now;
+    this.broadcast({ t: 'm.chat', playerId: ps.playerId, text: normalizeChat(text) });
+    return OK;
   }
 
   emote(ps, id) {

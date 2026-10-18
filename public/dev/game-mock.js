@@ -666,6 +666,10 @@ async function mockRequest(t, f = {}) {
       store.set((s) => ({ emotes: [...s.emotes.slice(-19), { seq: Date.now(), playerId: ME, id: f.id, at: Date.now() }] }));
       return {};
     }
+    case 'g.chat': {
+      store.set((s) => ({ emotes: [...s.emotes.slice(-19), { seq: Date.now(), playerId: ME, text: f.text, at: Date.now() }] }));
+      return {};
+    }
     case 'g.watch': {
       // server Match.watch rules: the other pair's boss field is hidden from a fighting player; no dead targets
       const target = (pub.fields || []).find((x) => x.fieldId === f.fieldId);

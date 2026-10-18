@@ -133,6 +133,36 @@
 .ebubble__icon { position: absolute; left: .26rem; top: .12rem; width: .68rem; height: .70rem; display: grid; place-items: center; }
 .ebubble .eart { width: 100%; height: 100%; }
 
+/* Plain text uses the same avatar anchor and lifetime animation as an emote. */
+.ebubble.ebubble--chat {
+  width: max-content; max-width: min(3.2rem, 45vw); height: auto; min-width: .7rem;
+  padding: max(.1rem, 6px) max(.14rem, 8px); border-radius: .08rem;
+  background: rgba(24, 30, 28, .97); color: #f0f6f3; border: 1px solid rgba(137, 218, 184, .45);
+  font-size: max(.16rem, 12px); line-height: 1.4; overflow-wrap: anywhere;
+}
+.ebubble.ebubble--chat::before { content: none; }
+.ebubble.ebubble--chat::after { left: -.13rem; top: calc(50% - .08rem); background: rgba(24, 30, 28, .97); }
+.team--scroll.team--chat .team__row { margin-right: 2.2rem; }
+.team--scroll .ebubble.ebubble--chat { width: 2.08rem; max-width: 2.08rem; max-height: .82rem; overflow-y: auto; pointer-events: auto; }
+.echat__tabs {
+  position: absolute; bottom: 100%; left: .15rem; display: flex; gap: .06rem;
+  background: #111b16; padding: .04rem; border: 1px solid var(--line-2);
+}
+.echat__tabs button { min-height: 30px; padding: .06rem .16rem; color: var(--text-md); font-size: max(.15rem, 12px); }
+.echat__tabs button[aria-selected="true"] { color: var(--mint-400); background: rgba(137, 218, 184, .15); }
+.ewheel__panel.echat {
+  left: 0; width: min(max(3.4rem, 260px), calc(100vw - .6rem)); height: auto; padding: max(.14rem, 10px);
+  background: rgba(12, 22, 17, .98); border: 1px solid var(--line-2); border-radius: .06rem;
+}
+.ewheel__panel.echat::before { content: none; }
+.echat .echat__tabs { left: 0; }
+.echat__form { display: flex; flex-direction: column; gap: max(.1rem, 6px); }
+.echat__form label { color: var(--mint-400); font-size: max(.16rem, 12px); }
+.echat__form input { width: 100%; min-width: 0; min-height: 36px; padding: .1rem; box-sizing: border-box; background: #08120e; color: #eef7f1; border: 1px solid var(--line-2); font-size: max(.18rem, 16px); user-select: text; -webkit-user-select: text; }
+.echat__footer { display: flex; justify-content: space-between; align-items: center; color: var(--text-lo); font-size: max(.14rem, 12px); }
+.echat__footer button { min-width: 64px; min-height: 36px; padding: .08rem .2rem; color: var(--mint-400); border: 1px solid var(--mint-700); }
+.echat__footer button:disabled { opacity: .4; }
+
 @keyframes emo-panel-in { from { opacity: 0; transform: translateY(.06rem) scale(.96); } }
 @keyframes emo-page-in { from { opacity: 0; } }
 @keyframes emo-page-from-right { from { opacity: .2; transform: translateX(45%); } }

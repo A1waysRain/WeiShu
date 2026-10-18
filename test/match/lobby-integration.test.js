@@ -99,6 +99,12 @@ test('co-op over websockets: two humans + AI, reconnect with the token mid-match
   await ok(b, { t: 'room.ready', ready: true });
   await ok(a, { t: 'room.start' });
   for (const c of [a, b]) await c.waitFor('m.public', (p) => p.phase === 'INFO_CHECK');
+  await ok(a, { t: 'g.chat', text: '等我一下，我来联防' });
+  for (const c of [a, b]) {
+    const chat = await c.waitFor('m.chat');
+    assert.equal(chat.playerId, a.id, 'the sender and teammate receive the same avatar owner');
+    assert.equal(chat.text, '等我一下，我来联防');
+  }
   await ok(a, { t: 'g.infoReady' });
   await ok(b, { t: 'g.infoReady' });
   const draft = await a.waitFor('m.public', (p) => p.phase === 'BAND_DRAFT' && p.draft);
