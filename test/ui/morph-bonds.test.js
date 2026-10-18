@@ -170,7 +170,31 @@ describe('变形同构体 — what the popup and the card show', () => {
     assert.ok(!hasClass(chips[0], 'is-granted'));
     const d = resolveDetail({ kind: 'unit', unit: { id: 7, side: 'ally', ownerId: 'p2', defId: WEARER, items: [ISO, HAMMER] } }, new Map());
     assert.deepEqual(d.unitItems, [ISO, HAMMER]);
-    assert.equal(resolveDetail({ kind: 'unit', unit: { id: 8, side: 'ally', ownerId: 'p2', defId: WEARER } }, new Map()).unitItems, null);
+    assert.deepEqual(resolveDetail({ kind: 'unit', unit: { id: 8, side: 'ally', ownerId: 'p2', defId: WEARER } }, new Map()).unitItems, []);
+  });
+
+  test('scouted operator: field metadata → render click → read-only equipment section (including empty slots)', async () => {
+    const { installFakePixi } = await import('../render/fakepixi.js');
+    const fake = installFakePixi();
+    try {
+      const { renderInfo } = await import('../../public/js/render/app.js');
+      for (const equipped of [[ISO, HAMMER], [ISO], []]) {
+        const meta = { id: 7, uid: 42, side: 'ally', kind: 'op', ownerId: 'p2', defId: WEARER, items: equipped };
+        const info = renderInfo(meta);
+        assert.deepEqual(info.items, equipped, 'the renderer preserves the equipment sent by the server');
+        assert.notEqual(info.items, equipped, 'render data does not alias the server metadata list');
+        const d = resolveDetail({ kind: 'unit', unit: info }, new Map());
+        assert.equal(d.piece, null, 'teammate has no editable local piece');
+        const blocks = ChessDetail({ chess: d.chess, piece: d.piece, editable: false, bonds: [], unitItems: d.unitItems });
+        const equip = blocks.find((b) => b?.key === 'equip');
+        assert.ok(equip, 'equipment section is always visible on a teammate unit');
+        assert.equal(equip.props.micro, `EQUIP ${equipped.length}/2`);
+        const rows = [...walk(equip)].filter((v) => typeof v.type === 'function' && v.type.name === 'ItemRow');
+        assert.deepEqual(rows.map((v) => v.props.itemId), equipped);
+        if (!equipped.length) assert.match(textOf(equip), /未携带装备/);
+        assert.ok(!blocks.some((b) => b?.key === 'actions'), 'no sell action for teammates');
+      }
+    } finally { fake.restore(); }
   });
 
   test('a 同构 row opens the wearer\'s card with its items: the pair (read-only 装备) and the granted chip', () => {

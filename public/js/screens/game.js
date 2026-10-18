@@ -1011,8 +1011,9 @@ function MatchScreen() {
 
   // unit clicks from the engine may only carry an id: resolve through m.field / spawn infos
   const detailTarget = useMemo(() => {
-    if (detail?.kind !== 'unit' || detail.unit) return detail;
-    const u = (Array.isArray(field?.units) ? field.units : []).find((x) => x && x.id === detail.unitId);
+    if (detail?.kind !== 'unit') return detail;
+    const id = detail.unitId ?? detail.unit?.id;
+    const u = (Array.isArray(field?.units) ? field.units : []).find((x) => x && x.id === id);
     return u ? { ...detail, unit: u } : detail;
   }, [detail, field]);
   const resolved = useMemo(() => resolveDetail(detailTarget, placeCtx.pieces), [detailTarget, placeCtx]);

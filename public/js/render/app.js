@@ -294,6 +294,8 @@ export function renderInfo(u) {
     // tap hands them to the detail card (a teammate's unit shows its owner's skill / module)
     skillIndex: Number.isInteger(u.skillIndex) ? u.skillIndex : undefined,
     moduleId: typeof u.moduleId === 'string' ? u.moduleId : undefined,
+    // Clicking a scouted/shared-field operator must carry its equipment to the read-only detail card too.
+    items: Array.isArray(u.items) ? u.items.filter((id) => typeof id === 'string') : undefined,
   };
 }
 
