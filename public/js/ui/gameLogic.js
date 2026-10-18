@@ -1194,6 +1194,8 @@ function equipCheck(ctx, itemPiece, targetPiece) {
 
 /** Whether equipping `itemId` attaches it (true) or consumes it on equip (false: no slot is used / replaced). */
 export function itemAttaches(item) {
+  // Normal 博士投影 stays equipped until the next round; only its golden variant is consumed immediately.
+  if (item?.kind === 'consume_on_equip_or_delayed') return !item.isGolden;
   return !(typeof item?.kind === 'string' && item.kind.startsWith('consume_on_equip'));
 }
 
@@ -1210,6 +1212,8 @@ export function equipMerges(ctx, uid, itemMergeCount = 2) {
   if (!isObj(piece) || piece.kind !== 'item') return false;
   const rec = ctx.getItem?.(piece.id);
   if (!rec || rec.isGolden || rec.itemType !== 'EQUIP' || !rec.mergeable) return false;
+  // Consume/delayed handlers run before the server's merge-on-equip branch.
+  if (typeof rec.kind === 'string' && rec.kind.startsWith('consume_on_equip')) return false;
   const n = Number.isInteger(rec.upgradeNum) ? rec.upgradeNum : itemMergeCount;
   if (!(n > 1 && n < 100) || !ctx.getItem(rec.upgradeChessId || rec.goldenId)) return false;
   let have = 0;

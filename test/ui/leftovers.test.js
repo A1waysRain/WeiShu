@@ -89,7 +89,20 @@ describe('1. equip-replace dialog', () => {
     assert.equal(itemDestroyable({ ...ctx, pieces }, 12), false, 'on an operator ⇒ locked');
   });
 
-  test('real match engine: the replace intent destroys exactly the picked item (and a bad replaceUid is refused)', () => {
+  test('博士投影: normal asks for replacement even with another copy owned; golden uses no slot', () => {
+    const normal = 'chess_item_5_06_e_a';
+    for (const id of [normal, 'chess_item_5_06_e_b']) {
+      const cx = ctxOf({ ...priv, hand: [
+        { uid: 3, kind: 'item', id }, { uid: 4, kind: 'item', id: normal }, ...priv.hand.slice(2),
+      ] });
+      const intent = dropIntent(cx, 3, { area: 'board', row: 9, col: 3 });
+      assert.equal(intent.confirmReplace, id === normal);
+      assert.equal(equipMerges(cx, 3), false);
+      assert.equal(!!replaceRequest(cx, intent, getChess, getItem), id === normal);
+    }
+  });
+
+  for (const incoming of [C, 'chess_item_5_06_e_a']) test(`real match engine: ${incoming} replaces exactly the picked item (and a bad replaceUid is refused)`, () => {
     const h = makeMatch({ mode: 'solo', difficulty: 'FUNNY', humans: 1, seed: 5 });
     h.start();
     h.toPrep(1);
@@ -98,7 +111,7 @@ describe('1. equip-replace dialog', () => {
     const chessId = Object.values(DATA.chess).find((c) => c.visible && !c.isGolden && c.tier === 1).chessId;
     const at = legalTileFor(m, ps, chessId);
     const unit = give(m, ps, chessId, 'board', at);
-    const [a, b, c] = [giveItem(m, ps, A), giveItem(m, ps, B), giveItem(m, ps, C)];
+    const [a, b, c] = [giveItem(m, ps, A), giveItem(m, ps, B), giveItem(m, ps, incoming)];
     assert.equal(m.handle('p_0', { t: 'g.equip', itemUid: a.uid, targetUid: unit.uid }).error, undefined);
     assert.equal(m.handle('p_0', { t: 'g.equip', itemUid: b.uid, targetUid: unit.uid }).error, undefined);
     h.flushAll();

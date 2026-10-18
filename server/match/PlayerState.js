@@ -1305,7 +1305,7 @@ export class PlayerState {
       if (again && again.area !== 'equipped') this._detach(again);
       if (ev.keep) {
         const holder = this.find(target.uid);
-        if (holder && holder.piece.kind === 'chess') this._attach(holder.piece, item);
+        if (holder && holder.piece.kind === 'chess') this._attach(holder.piece, item, replaceUid);
       }
       this.stats.itemsEquipped++;
       this.checkItemMerges();
