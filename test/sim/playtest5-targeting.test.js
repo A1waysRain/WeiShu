@@ -66,6 +66,36 @@ test('#1 the user\'s case: ground-only operators never hit a 近地悬浮 enemy 
   }
 });
 
+test('#220 (the owner\'s decision of 2026-10-08): a 速射手 blocking a ground enemy shoots a flyer in its range; a 神射手 keeps hitting the enemy it blocks', () => {
+  const defs = { enemies: {
+    e_walker: enemyRec({ key: 'e_walker', hp: 1e8, atk: 0, def: 800, speed: 1 }),
+    e_soft: enemyRec({ key: 'e_soft', hp: 1e8, atk: 0, def: 0, speed: 0 }),
+    e_bat: enemyRec({ key: 'e_bat', hp: 1e8, atk: 0, def: 0, speed: 0, motion: 'FLY' }),
+  } };
+  const shots = (chessId, other) => {
+    const h = makeBattle({ seed: 3, autoFinish: false, timeLimit: 120, captureNoisy: true, defs, units: [{ chessId, row: 10, col: 4 }] });
+    h.step();
+    const u = h.unit(chessId);
+    h.b.addBuff(u, { key: 'test:mute', flags: { silence: true } });
+    const walker = h.spawn('e_walker', { pos: [10, 7], routeIndex: 0, route: { motion: 'WALK', start: [10, 7], end: [10, 0], checkpoints: [] } });
+    assert.ok(h.runUntil(() => walker.blockedBy === u, 10), `${u.name} on a melee tile blocks the walker`);
+    const o = h.spawn(other, { pos: [10, 6], routeIndex: 0, route: { motion: other === 'e_bat' ? 'FLY' : 'WALK', start: [10, 6], end: [10, 6], checkpoints: [] } });
+    h.step();
+    assert.ok(h.b.enemiesInKeys(u.rangeKeys, u, u.profile).includes(o), `${other} in range`);
+    const n0 = h.hooksOf('damaged').length;
+    h.run(4);
+    const hits = (t) => h.hooksOf('damaged').slice(n0).filter((c) => c.source === u && c.target === t).length;
+    checkInvariants(h.b);
+    return { blocked: hits(walker), other: hits(o) };
+  };
+  const exu = shots('chess_char_3_01_a', 'e_bat');            // 能天使 (速射手: 优先攻击空中单位)
+  assert.ok(exu.other > 0 && exu.blocked === 0, `速射手: the flyer over her own blocked enemy (${JSON.stringify(exu)})`);
+  for (const other of ['e_soft', 'e_bat']) {
+    const far = shots('chess_char_4_20_a', other);            // 远牙 (神射手: 优先攻击防御力最低)
+    assert.ok(far.blocked > 0 && far.other === 0, `神射手: still the enemy it blocks, not ${other} (${JSON.stringify(far)})`);
+  }
+});
+
 test('#1 ground-only splash spares a hovering enemy next to its ground target (迷迭香 + aftershocks)', () => {
   const h = makeBattle({ units: [{ chessId: 'chess_char_6_12_a', row: 10, col: 3 }], seed: 3, autoFinish: false, timeLimit: 120, captureNoisy: true, defs: SYN });
   h.step();
@@ -206,7 +236,6 @@ test('#1 ground-only skills and talents spare a hovering enemy (the worst 731a01
     ['chess_char_6_12_a', 2, 4, '迷迭香 S3 “如你所愿”'],
     ['chess_char_5_06_a', 1, 5, '隐德来希 S2 绯红壁合 (PRTS 备注: 血镰 可对空 only on a 起飞 carrier)'],
     ['chess_char_5_13_a', 1, 5, '归溟幽灵鲨 拥抱自我 (PRTS 备注: "伤害与减速不可对空")'],
-    ['chess_char_3_04_a', 2, 5, '琳琅诗怀雅 S3 千金一掷 (PRTS 备注: 地面敌方单位, 弹道不可对空)'],
     ['chess_char_5_05_a', 0, 5, '乌尔比安 S1 必须促成的接触 (捕网, like 雪雉\'s "不对空" net)'],
   ];
   for (const [id, idx, col, name] of cases) for (const cid of [id, id.replace(/_a$/, '_b')]) {

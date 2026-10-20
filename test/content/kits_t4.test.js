@@ -1,11 +1,13 @@
-// Tier-4 operator kits (server/sim/content/kits/tier4.js): one signature test per chess (+ elite checks), real battles
+// Tier-4 operator kits (server/sim/content/kits/ops/chess_char_4_*.js): one signature test per chess (+ elite checks), real battles
 // through the harness. Numbers are read back from the data blackboards so the tests follow data changes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeBattle, enemyRec, checkInvariants } from '../helpers/battleHarness.js';
 import { getDefaultSource } from '../../server/sim/simdata.js';
-import kits from '../../server/sim/content/kits/tier4.js';
+import { TIER_KITS } from '../../server/sim/content/kits/index.js';
 import { absoluteRangeKeys } from '../../server/sim/targeting.js';
+
+const kits = TIER_KITS[3];
 
 const ds = getDefaultSource();
 const D = (id) => ds.getChess(id);
@@ -119,6 +121,8 @@ test('莫斯提马 S3: ripple hits every enemy in range, ATK +90 %, knock-back; 
   assert.ok(es.every((e) => hits.some((c) => c.target === e)), 'all three enemies hit by one ripple');
   approx(hits[0].amount, u.s.atk, 1e-6, 'full damage (res 0)');
   assert.ok(es.some((e, i) => e.x > x0[i] + 0.2), 'knocked back');
+  assert.ok(h.eventsOf('fx').some((f) => f[1] === 'displace' && f[4]?.keepFacing === true),
+    'Mostima S3 inherits the common push facing rule');
   checkInvariants(h.b);
 });
 
@@ -134,12 +138,16 @@ test('耶拉 S2: two drones ramp independently on two targets, ATK up; 低眉 +1
   const n0 = dmgBy(h, u).length;
   h.run(8);
   const hits = dmgBy(h, u).slice(n0);
-  const onA = hits.filter((c) => c.target === a).map((c) => c.amount), onB = hits.filter((c) => c.target === b).map((c) => c.amount);
+  const drones = hits.filter((c) => c.dmg?.tags?.includes('kjera:drone'));
+  const onA = drones.filter((c) => c.target === a).map((c) => c.amount), onB = drones.filter((c) => c.target === b).map((c) => c.amount);
   assert.ok(onA.length >= 3 && onB.length >= 3, 'both locked targets attacked');
   const atk = u.s.atk;
   approx(onA[0], atk * tr.init_atk_scale, 1e-6, 'ramp start');
   approx(onA[1], atk * (tr.init_atk_scale + tr.delta_atk_scale), 1e-6, 'ramp +15 %');
+  approx(onB[0], atk * tr.init_atk_scale, 1e-6, 'second drone starts its own ramp');
   approx(onB[1], atk * (tr.init_atk_scale + tr.delta_atk_scale), 1e-6, 'second drone ramps on its own');
+  const body = hits.filter((c) => c.dmg?.isAttack && !c.dmg.isSkill);
+  assert.ok(body.length >= 1 && body.some((c) => Math.abs(c.amount - atk) < 1e-4), 'her own hit stays at 100% ATK');
   h.run(15);
   assert.ok(noisy(h, 'statusApplied').some((c) => c.source === u && c.status === 'cold' && c.duration === bb['attack@cold']), 'cold proc');
   checkInvariants(h.b);
@@ -452,6 +460,27 @@ test('歌蕾蒂娅 S3: binds the farthest target, tornado pulses 85 % ATK arts e
   checkInvariants(h.b);
 });
 
+test('歌蕾蒂娅 S3: the skill-end 捕网 has radius 1, the tornado 1.5 (PRTS 备注; GitHub #324, PR #329)', () => {
+  const id = 'chess_char_4_12_a';
+  const h = makeBattle({ defs: { enemies: { enemy_dummy: dummy() } }, units: [{ chessId: id, row: 10, col: 3 }], timeLimit: 200, autoFinish: false });
+  h.step();
+  const u = h.unit(id);
+  h.spawn('enemy_dummy', { pos: [10, 6] });   // the farthest enemy: bound, the tornado sits on it
+  h.step();
+  assert.ok(u.skill.activate('test', { free: true }));
+  assert.deepEqual([u.mem.tornado.x, u.mem.tornado.y], [6, 10]);
+  const at = (x, y) => { const e = h.spawn('enemy_dummy', { pos: [10, 6] }); e.x = x; e.y = y; return e; };
+  const inner = at(6, 9.1), outer = at(6, 11.25);   // 0.9 and 1.25 from the centre
+  h.step();
+  for (const e of [inner, outer]) assert.ok(e.findBuff(`glady:slow:${u.id}`), 'both inside the tornado (slowed)');
+  const p0 = [inner.x, inner.y, outer.x, outer.y];
+  u.skill.end('test');
+  h.run(0.6);
+  assert.ok(Math.hypot(inner.x - p0[0], inner.y - p0[1]) > 0.3, 'the net pulls the enemy 0.9 from the centre');
+  assert.deepEqual([outer.x, outer.y], [p0[2], p0[3]], 'the one 1.25 from the centre stays: outside the net');
+  checkInvariants(h.b);
+});
+
 test('歌蕾蒂娅 阿戈尔的波涛: 深海猎人 regen 2.5 %/s and −25 % damage from 海怪; elite drag damage', () => {
   const id = 'chess_char_4_12_a', t0 = D(id).talents[0].bb;
   const sea = withTags(dummy({ key: 'enemy_sea', atk: 0 }), ['seamonster']);
@@ -501,7 +530,10 @@ test('灵知 S2: 130 % ATK arts + 2.5 s cold to all in range; fully charged cast
   assert.ok(h.runUntil(() => u.skill.activations >= 2, 20));
   const starts = noisy(h, 'skillStart').filter((c) => c.unit === u).map((c) => c.t);
   const colds = (T) => noisy(h, 'statusApplied').filter((c) => c.source === u && c.status === 'cold' && c.duration === bb.cold && c.t === T).length;
-  assert.equal(colds(starts[0]), 4, 'charged: two colds on each of the two enemies');
+  const freezes = (T) => noisy(h, 'statusApplied').filter((c) => c.source === u && c.status === 'freeze' && c.t === T).length;
+  // charged: two colds on each of the two enemies — each enemy's pair becomes one freeze (友方寒冷 「两两一对」, since 0.2.0)
+  assert.equal(colds(starts[0]), 2, 'charged: the first cold on each enemy lands as a cold');
+  assert.equal(freezes(starts[0]), 2, 'charged: the second cold on each enemy turns the pair into a freeze');
   assert.equal(colds(starts[1]), 2, 'single charge: one cold each');
   // normal attacks chill for 1 s
   assert.ok(noisy(h, 'statusApplied').some((c) => c.source === u && c.status === 'cold' && c.duration === t0.cold));
@@ -645,7 +677,8 @@ test('缄默德克萨斯 S3 (passive): deploy burst 2 × 115 % arts + 1.5 s stun
   assert.equal(waves.size, D(id).skill.duration, 'one rain per second while the passive lasts');
   assert.ok([...waves.values()].every((n) => n === bb.max_target), '≤ 2 distinct targets');
   approx(rain[0].amount, u.base.atk * (1 + t0.atk) * bb.atk_scale, 1e-6);
-  assert.equal(u.findBuff('texas2:rainAtk'), null, 'ATK bonus ends with the passive');
+  assert.equal(u.skill.active, false, 'ATK bonus ends with the skill');
+  approx(u.s.atk, u.base.atk);
 });
 
 test('缄默德克萨斯: first kill ⇒ full heal + recast; 剑术 buff removed', () => {
@@ -660,7 +693,8 @@ test('缄默德克萨斯: first kill ⇒ full heal + recast; 剑术 buff removed
   assert.ok(u.mem.texasKilled);
   approx(u.hpRatio, 1, 1e-3, 'full heal');
   assert.equal(u.findBuff('texas2:swordplay'), null);
-  assert.ok(u.findBuff('texas2:rainAtk'), 'passive recast');
+  assert.equal(u.skill.active, true, 'skill recast');
+  assert.equal(u.skill.activations, 2);
 });
 
 test('星熊 S2 (passive): DEF +13 % and 65 % ATK thorns; 战术装甲 negates ~25 % of hits; 重装 aura DEF +6 %', () => {
@@ -855,7 +889,7 @@ test('卡涅利安 / 蜜蜡 elite trait: keep DEF +100 % / RES +10 during the sk
   }
 });
 
-test('魔王 S3: range up, trait heal 65 % ATK/s, 鼓舞 +65 % of her max HP, HP redistributed every 2 s; motes ×1.5; 萨卡兹 −10 %', () => {
+test('魔王 S3: range up, trait 65 % ATK/s (生命回复速度), 鼓舞 +65 % of her max HP, HP redistributed every 2 s; motes ×1.5; 萨卡兹 −10 %', () => {
   const id = 'chess_char_4_25_a', bb = D(id).skill.bb, t0 = D(id).talents[0].bb, t1 = D(id).talents[1].bb;
   const sarkaz = withTags(dummy({ key: 'enemy_sarkaz' }), ['sarkaz']);
   const h = makeBattle({ defs: { enemies: { enemy_sarkaz: sarkaz } }, units: [{ chessId: id, row: 10, col: 5 }, { chessId: 'chess_char_1_02_a', row: 10, col: 6 }, { chessId: 'chess_char_4_17_a', row: 9, col: 5 }],
@@ -868,10 +902,11 @@ test('魔王 S3: range up, trait heal 65 % ATK/s, 鼓舞 +65 % of her max HP, HP
   const n0 = noisy(h, 'damaged').length;
   h.b.dealDamage(e, a, { amount: 1000, type: 'true' });
   approx(noisy(h, 'damaged')[n0].amount, 1000 * (1 - t1.damage_resistance), 1e-9);
-  // trait heal ×1.5 with a mote
-  h.runUntil(() => noisy(h, 'heal').some((c) => c.source === u && c.target === a), 3);
-  const hl = noisy(h, 'heal').find((c) => c.source === u && c.target === a);
-  approx(hl.amount, u.s.atk * D(id).traitBb['attack@atk_to_hp_recovery_ratio'] * t0['attack@trait_mul'] * a.s.healingTakenMul, 1e-6);
+  // the trait: 生命回复速度 (an hpRegen buff — PRTS 分支特性信息 吟游者; professions.js bardRegen), ×1.5 with a mote
+  const trait = (x) => x.findBuff(`trait:bard:${u.id}`)?.mods.hpRegen ?? 0;
+  h.run(0.3);
+  approx(trait(a), u.s.atk * D(id).traitBb['attack@atk_to_hp_recovery_ratio'] * t0['attack@trait_mul'], 1e-6, 'trait ×1.5 with a mote');
+  assert.equal(noisy(h, 'heal').filter((c) => c.source === u && c.target === a).length, 0, 'no heal of hers');
   // S3
   h.b.dealDamage(null, b, { amount: b.s.maxHp * 0.7, type: 'true' });
   assert.ok(u.skill.activate('test', { free: true }));
@@ -882,9 +917,8 @@ test('魔王 S3: range up, trait heal 65 % ATK/s, 鼓舞 +65 % of her max HP, HP
   for (let i = 0; i < 90 && !redistributed; i++) { h.step(); redistributed = h.events.some((ev) => ev[0] === 'fx' && ev[1] === 'redistribute'); }
   assert.ok(redistributed);
   approx(a.hpRatio, b.hpRatio, 1e-9, 'equal HP ratios after redistribution');
-  h.runUntil(() => noisy(h, 'heal').filter((c) => c.source === u && c.target === b && c.t > 0.8).length >= 1, 3);
-  const sh = noisy(h, 'heal').filter((c) => c.source === u && c.target === b).pop();
-  approx(sh.amount, u.s.atk * bb['attack@atk_to_hp_recovery_ratio'] * t0['attack@trait_mul'] * b.s.healingTakenMul, 1e-6, 'trait 65 %');
+  h.run(0.3);
+  approx(trait(b), u.s.atk * bb['attack@atk_to_hp_recovery_ratio'] * (b.findBuff(`cetsyr:mote:${u.id}`) ? t0['attack@trait_mul'] : 1), 1e-6, 'trait 65 %');
   h.runUntil(() => !u.skill.active, 40);
   h.run(0.3);
   approx(a.s.maxHp, a.base.maxHp, 1e-9, '鼓舞 gone');
@@ -1002,14 +1036,17 @@ test('耶拉 S2: against a lone enemy both drones lock it and ramp independently
   const n0 = dmgBy(h, u).length;
   h.run(4);
   const hits = dmgBy(h, u).slice(n0);
+  const drones = hits.filter((c) => c.dmg?.tags?.includes('kjera:drone'));
   const byT = new Map();
-  for (const c of hits) (byT.get(c.t) ?? byT.set(c.t, []).get(c.t)).push(c.amount / u.s.atk);
+  for (const c of drones) (byT.get(c.t) ?? byT.set(c.t, []).get(c.t)).push(c.amount / u.s.atk);
   const volleys = [...byT.values()];
   assert.ok(volleys.length >= 3);
-  assert.ok(volleys.every((v) => v.length === 2), 'two drone hits per attack');
+  assert.ok(volleys.every((v) => v.length === 2), 'two drone hits per tick');
   approx(volleys[0][0], tr.init_atk_scale, 1e-6);
   approx(volleys[0][1], tr.init_atk_scale, 1e-6, 'second drone starts its own ramp');
   approx(volleys[1][1], tr.init_atk_scale + tr.delta_atk_scale, 1e-6);
+  const full = u.s.atk * u.s.atkScaleMul;
+  assert.ok(hits.some((c) => c.dmg?.isAttack && !c.dmg.isSkill && Math.abs(c.amount - full) < 1e-4), 'body at 100% ATK');
   checkInvariants(h.b);
 });
 

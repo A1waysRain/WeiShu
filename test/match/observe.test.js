@@ -4,7 +4,7 @@
 // a reloaded screen that watched a teammate's battle takes the watch back (resumedWatch).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { observeTarget, teammateProgress, cameraLayers, layerCamera, isClientCombat, resumedWatch } from '../../public/js/battle/observe.js';
+import { observeTarget, teammateProgress, cameraLayers, layerCamera, loneHalf, isClientCombat, resumedWatch } from '../../public/js/battle/observe.js';
 
 const P = (id, seat, extra = {}) => ({ playerId: id, seat, name: id.toUpperCase(), alive: true, ...extra });
 const pubOf = (phase, fields, players) => ({ phase, combatMode: 'client', fields, players });
@@ -22,7 +22,12 @@ test('observeTarget: prep, own battle running / over, boss pairs, eliminated pla
   assert.deepEqual(observeTarget(players[1], combat(true), 'a', { ownDone: true }), { fieldId: 'n:b' }, 'the local battle already ended');
   assert.deepEqual(observeTarget(players[1], combat(false), 'a'), { fieldId: 'n:b' });
   assert.deepEqual(observeTarget(players[0], combat(false), 'a', { observing: true }), { back: true });
-  assert.deepEqual(teammateProgress(combat(false), 'a'), [{ playerId: 'b', name: 'B', isBot: false, killed: 3, total: 8, done: false }]);
+  // the teammate's capsule reads `resolved` (the field's own enemies knocked out or leaked); a report without one falls
+  // back to `killed` (public/js/battle/observe.js teammateProgress)
+  assert.deepEqual(teammateProgress(combat(false), 'a'), [{ playerId: 'b', name: 'B', isBot: false, killed: 3, resolved: 3, total: 8, done: false }]);
+  const reported = pubOf('COMBAT', [{ fieldId: 'n:b', kind: 'normal', players: ['b'], live: true, progress: { killed: 5, resolved: 3, total: 8, done: false } }], players);
+  assert.deepEqual(teammateProgress(reported, 'a'), [{ playerId: 'b', name: 'B', isBot: false, killed: 5, resolved: 3, total: 8, done: false }],
+    'a reported `resolved` wins over `killed` (5 counted knock-outs — splits included —, 3 of the round\'s own enemies resolved)');
   const fa = pubOf('FINAL_ASSAULT', [
     { fieldId: 'b1', kind: 'boss', players: ['a', 'b'], live: true },
     { fieldId: 'b2', kind: 'boss', players: ['d'], live: true },
@@ -43,6 +48,13 @@ test('cameraLayers: ‹ LEFT / 全景 / RIGHT › with "你自己" / name / "无
   assert.deepEqual(cameraLayers({ kind: 'boss', players: ['a'], sides: { a: 'L' } }, pub, 'a'), [], 'a solo boss field has no halves');
   assert.deepEqual(layerCamera(unite, 'R', 'R'), { rect: unite.rect, side: 'R', half: true });
   assert.deepEqual(layerCamera(unite, 'ALL', 'R'), { rect: unite.rect, side: 'R' });
+  // a lone helper's 联防 starts on its half; 全景 stays the whole field (GitHub #635, PR #637)
+  assert.equal(loneHalf(single), 'L');
+  assert.equal(loneHalf({ ...unite, players: ['b'], sides: { b: 'R' } }), 'R');
+  assert.equal(loneHalf(unite), null, 'two helpers start on 全景');
+  assert.equal(loneHalf({ kind: 'boss', players: ['a'], sides: { a: 'L' } }), null, 'boss fields keep their own rule');
+  assert.equal(loneHalf(null), null);
+  assert.deepEqual(layerCamera(single, 'ALL', 'L'), { rect: unite.rect, side: 'L' });
 });
 
 test('resumedWatch: a reload while watching a teammate\'s battle adopts the resent field once per battle (review, DESIGN §20.15)', () => {

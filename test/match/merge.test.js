@@ -67,7 +67,7 @@ test('3 copies (board + hand + bought) merge into 1 elite on the board copy\'s t
   m.dispose();
 });
 
-test('elites never merge; 风丸 merges with 2 copies; a full hand still buys the merge-completing copy', () => {
+test('elites never merge; 风丸 merges with 2 copies; a full hand refuses the merge-completing copy too (GitHub #82)', () => {
   const { m, ps } = prep(22);
   const id = chessOfTier(2).find((x) => m.pool.has(x) && x !== 'chess_char_2_11_a');
   const golden = DATA.chess[id].goldenId;
@@ -83,7 +83,9 @@ test('elites never merge; 风丸 merges with 2 copies; a full hand still buys th
     m.handle('p_0', { t: 'g.buy', slot: 0 });
     assert.ok(ps.hand.some((p) => p && p.id === DATA.chess.chess_char_2_11_a.goldenId), '风丸 elite after 2 copies');
   }
-  // full hand + 2 copies in the hand: buying the 3rd completes the merge (net −1)
+  // full hand + 2 copies in the hand: the 3rd copy is refused like any purchase (PRTS 卫戍协议/帮助 §手牌区 "当常规手牌区
+  // 全满无空位时，玩家将无法执行使手牌溢出的操作" — "例如招募/购入"; GitHub #82); a sale frees a slot, then the purchase
+  // completes the merge (the elite in the hand)
   for (const p of ps.hand) if (p) ps.returnCopies(p);
   ps.hand.fill(null);
   const x = chessOfTier(1).filter((c) => m.pool.has(c));
@@ -95,15 +97,19 @@ test('elites never merge; 风丸 merges with 2 copies; a full hand still buys th
   stock(m, ps, x[20] || x[x.length - 1], 1);
   assert.deepEqual(m.handle('p_0', { t: 'g.buy', slot: 1 }), { error: ERR.HAND_FULL });
   stock(m, ps, target, 0);
+  assert.deepEqual(m.handle('p_0', { t: 'g.buy', slot: 0 }), { error: ERR.HAND_FULL }, 'the merge-completing copy too');
+  assert.ok(!ps.hand.some((p) => p && p.id === DATA.chess[target].goldenId));
+  const filler = ps.hand.find((p) => p && p.id !== target);
+  assert.deepEqual(m.handle('p_0', { t: 'g.sell', uid: filler.uid }), { ok: true });
   assert.deepEqual(m.handle('p_0', { t: 'g.buy', slot: 0 }), { ok: true });
   assert.ok(ps.hand.some((p) => p && p.id === DATA.chess[target].goldenId));
-  assert.equal(ps.hand.filter(Boolean).length, 9);
+  assert.equal(ps.hand.filter(Boolean).length, 8, '10 − the sold filler − 2 copies + the elite');
   assert.ok(ps.tempEmpty);
   checkInvariants(m);
   m.dispose();
 });
 
-test('merge from two board copies with a full hand: the elite takes the copy that deploys first (no overflow, one tile freed)', () => {
+test('merge from two board copies with a full hand (a gained copy; a purchase is refused): the elite takes the copy that deploys first (no overflow, one tile freed)', () => {
   const { m, ps } = prep(23);
   const ids = chessOfTier(1, (c) => c.position === 'MELEE').filter((c) => m.pool.has(c));
   const id = ids[0];
@@ -115,7 +121,8 @@ test('merge from two board copies with a full hand: the elite takes the copy tha
   for (let i = 0; ps.hand.some((p) => p == null); i++) give(m, ps, others[i]);
   stock(m, ps, id);
   assert.equal(ps.deployCount, 2);
-  assert.deepEqual(m.handle('p_0', { t: 'g.buy', slot: 0 }), { ok: true });
+  assert.deepEqual(m.handle('p_0', { t: 'g.buy', slot: 0 }), { error: ERR.HAND_FULL }, 'a full hand refuses the purchase (GitHub #82)');
+  assert.ok(ps.acquireChess(id, { source: 'grant' }), 'a gain (an effect\'s grant) completes the merge');
   // deploy order = by column from the left (col asc, then row desc; Battle.start): (9,3) before (9,4) — [ASSUMED] the copy
   // the battle deploys first
   const elite = ps.board.get('9,3');
@@ -130,16 +137,34 @@ test('merge from two board copies with a full hand: the elite takes the copy tha
   m.dispose();
 });
 
+test('a promotion offer left unpicked stays queued into the next round and can be taken there (2026-10-15)', () => {
+  const { h, m, ps } = prep(25);
+  ps.pushRewardOffer('merge');
+  const offer = ps.offers[0];
+  const pick = offer.slots[0].id;
+  assert.deepEqual(m.handle('p_0', { t: 'g.ready', ready: true }), { ok: true });
+  h.drive(() => m.phase === PHASE.PREP && m.round === 2);
+  assert.equal(ps.offers.length, 1, 'still queued in the next prep');
+  assert.equal(ps.offers[0], offer, 'the same offer, the same cards');
+  assert.deepEqual(m.handle('p_0', { t: 'g.reward', idx: 0 }), { ok: true });
+  assert.equal(ps.offers.length, 0);
+  assert.ok([...ps.hand, ...ps.temp].some((p) => p && p.id === pick), 'the picked operator arrived');
+  checkInvariants(m);
+  m.dispose();
+});
+
 test('merge whose copies are not deployed (temp) with a full hand overflows the elite into temp (blocks ready until resolved)', () => {
   const { m, ps } = prep(23);
   const ids = chessOfTier(1, (c) => c.position === 'MELEE').filter((c) => m.pool.has(c));
   const id = ids[0];
-  give(m, ps, id, 'temp', 0);
-  give(m, ps, id, 'temp', 1);
   const others = chessOfTier(2).filter((c) => m.pool.has(c));
   for (let i = 0; ps.hand.some((p) => p == null); i++) give(m, ps, others[i]);
-  stock(m, ps, id);
-  assert.deepEqual(m.handle('p_0', { t: 'g.buy', slot: 0 }), { ok: true });
+  // with the hand full they wait in temp (a free hand slot would pull them in, PRTS 卫戍协议/帮助 §手牌区)
+  give(m, ps, id, 'temp', 0);
+  give(m, ps, id, 'temp', 1);
+  assert.equal(ps.temp.filter(Boolean).length, 2);
+  // a gain completes the merge (a purchase is refused with a full hand)
+  assert.ok(ps.acquireChess(id, { source: 'grant' }));
   assert.ok(ps.temp.some((p) => p && p.id === DATA.chess[id].goldenId), 'elite overflowed into temp');
   assert.equal(ps.board.size, 0, 'nothing was deployed');
   assert.deepEqual(m.handle('p_0', { t: 'g.ready', ready: true }), { error: ERR.TEMP_NOT_EMPTY });
@@ -147,14 +172,16 @@ test('merge whose copies are not deployed (temp) with a full hand overflows the 
   m.dispose();
 });
 
-test('reward pick respects the pool and a full hand; offers expire at prep end', () => {
+test('displayed operator rewards survive stock exhaustion, respect a full hand and stay queued past the prep end', () => {
   const { h, m, ps } = prep(24);
   ps.pushRewardOffer('merge');
   const offer = ps.offers[0];
   const id0 = offer.slots[0].id;
   const taken = m.pool.take(id0, 100);
-  assert.deepEqual(m.handle('p_0', { t: 'g.reward', idx: 0 }), { error: ERR.SOLD_OUT });
+  assert.deepEqual(m.handle('p_0', { t: 'g.reward', idx: 0 }), { ok: true });
+  assert.equal(m.pool.entries.get(id0).left, -1);
   m.pool.give(id0, taken);
+  ps.pushRewardOffer('merge', { ids: [id0] });
   const others = chessOfTier(3).filter((c) => m.pool.has(c) && !offer.slots.some((s) => s.id === c));
   for (let i = 0; ps.hand.some((p) => p == null); i++) give(m, ps, others[i]);
   assert.deepEqual(m.handle('p_0', { t: 'g.reward', idx: 0 }), { error: ERR.HAND_FULL });
@@ -164,7 +191,8 @@ test('reward pick respects the pool and a full hand; offers expire at prep end',
   assert.deepEqual(m.handle('p_0', { t: 'g.ready', ready: true }), { ok: true });
   h.sched.runNext();
   h.sched.runNext();
-  assert.equal(ps.offers.length, 0, 'offer gone at prep end');
+  // a queued offer lasts until picked (the maintainer's decision of 2026-10-15): the prep end keeps it for the next prep
+  assert.equal(ps.offers.length, 1, 'the offer stays after the prep end');
   checkInvariants(m);
   m.dispose();
 });
@@ -187,11 +215,14 @@ test('equipment: max 2 (a third replaces the oldest), identical normal items mer
   assert.ok(ps.hand.some((p) => p && p.id === 'chess_item_1_02_e_b'), 'golden item in the hand');
   assert.ok(!a.items.some((x) => x.id === 'chess_item_1_02_e_a'));
   assert.equal(ps.stats.itemMerges, 1);
-  // buying an item whose twin is in the hand merges immediately (and works with a full hand)
+  // buying an item whose twin is in the hand merges immediately — but a full hand refuses the purchase all the same
+  // (PRTS 卫戍协议/帮助 §手牌区, GitHub #82)
   const i5 = giveItem(m, ps, 'chess_item_2_03_e_a');
   const others = chessOfTier(1).filter((c) => m.pool.has(c));
   for (let i = 0; ps.hand.some((p) => p == null); i++) give(m, ps, others[i]);
   ps.shop.slots[0] = { kind: 'item', id: 'chess_item_2_03_e_a', basePrice: 2, frozen: false, sold: false };
+  assert.deepEqual(m.handle('p_0', { t: 'g.buy', slot: 0 }), { error: ERR.HAND_FULL });
+  assert.deepEqual(m.handle('p_0', { t: 'g.sell', uid: ps.hand.find((p) => p && p.kind === 'chess' && p !== a).uid }), { ok: true });
   assert.deepEqual(m.handle('p_0', { t: 'g.buy', slot: 0 }), { ok: true });
   assert.ok(ps.hand.some((p) => p && p.id === 'chess_item_2_03_e_b'));
   assert.ok(!ps.find(i5.uid));
@@ -295,7 +326,7 @@ test('consume-on-equip built-ins: 盟约之币 funds, 随身身份牌 layers, �
   m.dispose();
 });
 
-test('item merge with a full hand AND a full temp: the golden item takes the equipped twin\'s slot instead of being lost', () => {
+test('item merge with a full visible bench: the golden item waits in the overflow queue', () => {
   const { m, ps } = prep(29);
   const id = chessOfTier(3).find((c) => m.pool.has(c));
   const carrier = give(m, ps, id, 'board', [10, 3]);
@@ -311,7 +342,8 @@ test('item merge with a full hand AND a full temp: the golden item takes the equ
   ps.recompute();
   const got = ps.acquireItem('chess_item_1_02_e_a', { source: 'grant' });
   assert.ok(got && got.id === 'chess_item_1_02_e_b', 'the merge produced the golden item');
-  assert.deepEqual(carrier.items.map((x) => x.id), ['chess_item_1_01_e_a', 'chess_item_1_02_e_b'], 'golden item equipped in the twin\'s slot');
+  assert.deepEqual(carrier.items.map((x) => x.id), ['chess_item_1_01_e_a']);
+  assert.equal(ps.temp[5], got, 'the golden item waits behind the visible window');
   assert.ok(!ps.find(twin.uid), 'the twin was consumed');
   assert.equal(ps.stats.itemMerges, 1);
   checkInvariants(m);
@@ -378,9 +410,10 @@ test('a merge completed during SETTLE (突变细胞) keeps its reward offer for 
     assert.equal([...ps.hand, ...ps.temp].filter((p) => p && p.id === CELL).length, 1, `${label}: the cell came back`);
     assert.ok(ps.temp.every((p) => !p || p.id === CELL), `${label}: nothing else waits in temp`);
     checkInvariants(m);
-    // it expires at the end of that prep like any other offer
+    // it stays queued through the round like any other offer (kept until picked, 2026-10-15)
+    const queued = ps.offers.length;
     h.drive(() => m.phase === PHASE.COMBAT && m.round === 2);
-    assert.equal(ps.offers.length, 0);
+    assert.equal(ps.offers.length, queued);
     m.dispose();
   }
 });
@@ -429,6 +462,67 @@ test('equipment: the replace dialog picks WHICH equipped item a third one destro
   // hand items can still be destroyed
   const i4 = giveItem(m, ps, 'chess_item_2_03_e_a');
   assert.deepEqual(m.handle('p_0', { t: 'g.destroy', uid: i4.uid }), { ok: true });
+  checkInvariants(m);
+  m.dispose();
+});
+
+test('equipment: a consume-on-equip item on a full carrier replaces the picked item first and leaves the slot free; a refused 博士投影 keeps both (GitHub #263)', () => {
+  // PRTS 卫戍协议/帮助 "达到上限强行佩戴会改为替换装备：指定一件已佩戴装备替换为将要佩戴的装备，并销毁被指定的装备"
+  const { m, ps } = prep(27);
+  const pool = chessOfTier(2).filter((c) => m.pool.has(c) && DATA.chess[c].bonds.length);
+  let n = 0;
+  /** A normal operator in the hand wearing two different plain items (older, newer). */
+  const fullCarrier = (id = pool[n]) => {
+    const a = give(m, ps, id);
+    const [older, newer] = [['chess_item_1_01_e_a', 'chess_item_1_02_e_a'], ['chess_item_3_03_e_a', 'chess_item_1_05_e_a'], ['chess_item_3_06_e_a', 'chess_item_2_04_e_a'], ['chess_item_3_05_e_a', 'chess_item_3_02_e_a'], ['chess_item_2_01_e_a', 'chess_item_3_07_e_a']][n++]
+      .map((itemId) => giveItem(m, ps, itemId));
+    for (const it of [older, newer]) assert.deepEqual(m.handle('p_0', { t: 'g.equip', itemUid: it.uid, targetUid: a.uid }), { ok: true });
+    assert.deepEqual(a.items.map((x) => x.uid), [older.uid, newer.uid]);
+    return { a, older, newer };
+  };
+  const equip = (it, a, rep) => m.handle('p_0', { t: 'g.equip', itemUid: it.uid, targetUid: a.uid, ...(rep ? { replaceUid: rep.uid } : {}) });
+
+  // the normal 博士投影 takes the slot of the item the player picked (the NEWER one), not the oldest
+  let { a, older, newer } = fullCarrier();
+  const holo = giveItem(m, ps, 'chess_item_5_06_e_a');
+  assert.deepEqual(equip(holo, a, newer), { ok: true });
+  assert.deepEqual(a.items.map((x) => x.uid), [older.uid, holo.uid], 'the pick destroyed, the older kept, 博士投影 equipped');
+  assert.equal(ps.find(newer.uid), null);
+  // 盟约之币: the pick is destroyed, the coin pays and is consumed — one item and a free slot are left
+  ({ a, older, newer } = fullCarrier());
+  const coin = giveItem(m, ps, 'chess_item_1_03_e_a');
+  const funds = ps.funds;
+  assert.deepEqual(equip(coin, a, newer), { ok: true });
+  assert.equal(ps.funds, funds + 1);
+  assert.deepEqual(a.items.map((x) => x.uid), [older.uid], 'a free slot is left');
+  assert.equal(ps.find(newer.uid), null);
+  assert.equal(ps.find(coin.uid), null, 'the coin is consumed');
+  // 随身身份牌 (picking the OLDER item): the layers go to the carrier's bonds, the newer item stays
+  ({ a, older, newer } = fullCarrier());
+  const card = giveItem(m, ps, 'chess_item_1_04_e_a');
+  const bond = DATA.chess[a.id].bonds[0];
+  const layers = ps.layers[bond] || 0;
+  assert.deepEqual(equip(card, a, older), { ok: true });
+  assert.equal(ps.layers[bond], layers + 3);
+  assert.deepEqual(a.items.map((x) => x.uid), [newer.uid]);
+  assert.equal(ps.find(older.uid), null);
+  // the golden 博士投影 promotes at once; the item not picked stays on the elite
+  ({ a, older, newer } = fullCarrier());
+  const gold = giveItem(m, ps, 'chess_item_5_06_e_b');
+  assert.deepEqual(equip(gold, a, older), { ok: true });
+  assert.ok(DATA.chess[a.id].isGolden, 'promoted');
+  assert.deepEqual(a.items.map((x) => x.uid), [newer.uid]);
+  // refused (博士投影 — either quality — on an elite): nothing is destroyed, the order is kept, the item stays in the hand
+  ({ a, older, newer } = fullCarrier(DATA.chess[pool[n]].goldenId));
+  for (const id of ['chess_item_5_06_e_a', 'chess_item_5_06_e_b']) {
+    const it = giveItem(m, ps, id);
+    for (const rep of [older, newer, null]) {
+      assert.deepEqual(equip(it, a, rep), { error: ERR.BAD_TARGET, detail: 'already elite' }, id);
+      assert.deepEqual(a.items.map((x) => x.uid), [older.uid, newer.uid], `${id}: both kept`);
+    }
+    assert.equal(ps.find(it.uid).area, 'hand');
+    assert.deepEqual(m.handle('p_0', { t: 'g.destroy', uid: it.uid }), { ok: true });
+  }
   checkInvariants(m);
   m.dispose();
 });

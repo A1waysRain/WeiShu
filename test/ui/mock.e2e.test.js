@@ -15,9 +15,10 @@
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { aimedDrag, groundAnchor, anchorPoint, cameraSettled } from '../e2e/client.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const OUT = path.join(ROOT, 'test/e2e/out');
@@ -62,7 +63,7 @@ describe('in-match UI (mock harness, headless Chrome)', { skip: !ENABLED && 'set
     const problems = [];
     page.on('console', (m) => { if (m.type() === 'error') problems.push(`console: ${m.text()}`); });
     page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
-    page.on('requestfailed', (r) => problems.push(`requestfailed: ${r.url()} ${r.failure()?.errorText}`));
+    page.on('requestfailed', (r) => { if (!/fonts\.(googleapis|gstatic)/.test(r.url())) problems.push(`requestfailed: ${r.url()} ${r.failure()?.errorText}`); });
     page.on('response', (r) => { if (r.status() >= 400) problems.push(`http ${r.status()}: ${r.url()}`); });
     await page.goto(`${base}/dev/game-mock.html?shot=1&render=${render}&${query}`, { waitUntil: 'networkidle0' });
     await page.waitForFunction(() => !!document.querySelector('.screen:not(.gload)'), { timeout: 15000 });
@@ -71,6 +72,16 @@ describe('in-match UI (mock harness, headless Chrome)', { skip: !ENABLED && 'set
   }
   const mockState = (page) => page.evaluate(() => JSON.parse(JSON.stringify(globalThis.__MOCK__.S().priv)));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const useWhip = (page) => page.evaluate(async () => {
+    const { net } = await import('/js/net.js');
+    const uid = 900000 + globalThis.__MOCK__.S().requests.length;
+    globalThis.__MOCK__.mutate((S) => {
+      const idx = S.priv.hand.findIndex((p) => !p);
+      S.priv.hand[idx] = { uid, kind: 'item', id: 'chess_item_6_03_m', tier: 6 };
+    });
+    await net.request('g.art', { itemUid: uid, row: 10, col: 5 });
+    return globalThis.__MOCK__.S().priv.personalChoice;
+  });
   /** Swipe the open direction wheel from its centre towards `dir` and release (research 09 §1.2). */
   const swipeWheel = async (page, dir = 'RIGHT') => {
     await page.waitForSelector('.fwheel__dia', { timeout: 4000 });
@@ -94,6 +105,70 @@ describe('in-match UI (mock harness, headless Chrome)', { skip: !ENABLED && 'set
       }
     });
   }
+
+  test('equip replace: focused buttons keep their native Enter action', async () => {
+    const { page, problems } = await open('phase=PREP', { render: 'fallback' });
+    const initial = await mockState(page);
+    const target = initial.board.find((p) => p.kind === 'chess' && p.items?.length === 2);
+    assert.ok(target, 'the fixture has an operator with two equipped items');
+    const item = initial.hand.find((p) => p?.kind === 'item' && !target.items.some((x) => x.id === p.id));
+    assert.ok(item, 'the fixture has a loose equipment item');
+    const requests = () => page.evaluate(() => globalThis.__MOCK__.S().requests.filter(([t]) => t === 'g.equip'));
+    const center = (sel) => page.$eval(sel, (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+    const openReplace = async () => {
+      const from = await center(`.ff-piece[data-uid="${item.uid}"]`);
+      const to = await center(`.ff-piece[data-uid="${target.uid}"]`);
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(to.x, to.y, { steps: 8 });
+      await sleep(80);
+      await page.mouse.up();
+      await page.waitForSelector('.eqr__opt');
+      await sleep(500); // let the dialog's mount effect settle before selecting an item
+      await page.click(`.eqr__opt[data-uid="${target.items[1].uid}"]`);
+      await page.waitForSelector('.eqr__opt[aria-checked="true"]');
+    };
+    const tabToCancel = async () => {
+      for (let i = 0; i < 8; i++) {
+        if (await page.evaluate(() => document.activeElement?.matches('.eqr__cancel'))) return;
+        await page.keyboard.press('Tab');
+      }
+      assert.fail('Tab did not focus Cancel');
+    };
+
+    for (const key of ['Space', 'Enter']) {
+      await openReplace();
+      await tabToCancel();
+      await page.keyboard.press(key);
+      await page.waitForFunction(() => !document.querySelector('.eqr'));
+      await sleep(200);
+      assert.deepEqual(await requests(), [], `${key} on Cancel sends no equipment intent`);
+      const state = await mockState(page);
+      assert.deepEqual(state.board.find((p) => p.uid === target.uid).items, target.items, 'both equipped items remain');
+      assert.ok(state.hand.some((p) => p?.uid === item.uid), 'the new item remains in the hand');
+    }
+
+    // Enter on an equipment option toggles its selection; only the confirmation button replaces it.
+    await openReplace();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !document.querySelector('.eqr__opt[aria-checked="true"]'));
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.eqr__opt[aria-checked="true"]');
+    assert.deepEqual(await requests(), [], 'Enter on an option only changes the selected item');
+    await tabToCancel();
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement?.matches('.eqr__ok')), true);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !document.querySelector('.eqr'));
+    await sleep(200);
+    assert.deepEqual(await requests(), [['g.equip', { itemUid: item.uid, targetUid: target.uid, replaceUid: target.items[1].uid }]]);
+    const replaced = await mockState(page);
+    assert.deepEqual(replaced.board.find((p) => p.uid === target.uid).items.map((x) => x.uid), [target.items[0].uid, item.uid]);
+    assert.ok(!replaced.hand.some((p) => p?.uid === item.uid), 'the confirmed equipment leaves the hand');
+    // This keyboard regression also runs without optional art/fonts; JavaScript exceptions still fail it.
+    assert.deepEqual(problems.filter((p) => p.startsWith('pageerror:')), []);
+    await page.close();
+  });
 
   test('prep: buy, shortcuts, ready, Esc', async () => {
     const { page, problems } = await open('phase=PREP');
@@ -149,41 +224,122 @@ describe('in-match UI (mock harness, headless Chrome)', { skip: !ENABLED && 'set
     await page.close();
   });
 
-  test('prep: Q retreats and X sells only the selected operator', async () => {
+  test('prep: a shortcut upgrade clears the previous level confirmation', async () => {
+    const { page, problems } = await open('phase=PREP', { render: 'fallback' });
+    try {
+      await page.evaluate(() => globalThis.__MOCK__.mutate((S) => { S.priv.funds = 100; }));
+      const before = await mockState(page);
+      const pressed = () => page.$eval('.shopbar .lvcard', (el) => el.getAttribute('aria-pressed'));
+      await page.click('.shopbar .lvcard');
+      await page.waitForFunction(() => document.querySelector('.lvcard').getAttribute('aria-pressed') === 'true');
+      assert.equal((await mockState(page)).funds, before.funds, 'selecting does not charge');
+      await page.keyboard.press('KeyD');
+      await page.waitForFunction((lv) => globalThis.__MOCK__.S().priv.shop.level === lv + 1, {}, before.shop.level);
+      const upgraded = await mockState(page);
+      assert.equal(upgraded.funds, before.funds - before.shop.upgradePrice);
+      assert.equal(await pressed(), 'false', 'the completed upgrade must disarm its confirmation');
+      await page.click('.shopbar .lvcard');
+      await page.waitForFunction(() => document.querySelector('.lvcard').getAttribute('aria-pressed') === 'true');
+      await sleep(300); // allow a mistaken second upgrade to reach the mock server
+      assert.equal((await mockState(page)).shop.level, upgraded.shop.level, 'the next click only selects');
+      assert.equal((await mockState(page)).funds, upgraded.funds, 'the next click does not charge');
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.querySelector('.lvcard').getAttribute('aria-pressed') === 'false');
+      await page.keyboard.press('KeyD');
+      await page.waitForFunction((lv) => globalThis.__MOCK__.S().priv.shop.level === lv + 1, {}, upgraded.shop.level);
+      assert.equal((await mockState(page)).funds, upgraded.funds - upgraded.shop.upgradePrice, 'D still upgrades directly');
+      // Optional art / audio may be absent; this state regression needs no asset pack.
+      assert.deepEqual(problems.filter((p) => p.startsWith('pageerror:')), []);
+    } finally { await page.close(); }
+  });
+
+  test('prep: mouse level confirmation survives same-level updates and resets after purchase', async () => {
+    const { page, problems } = await open('phase=PREP', { render: 'fallback' });
+    try {
+      await page.evaluate(() => globalThis.__MOCK__.mutate((S) => { S.priv.funds = 100; }));
+      const before = await mockState(page);
+      await page.click('.shopbar .lvcard');
+      await page.waitForFunction(() => document.querySelector('.lvcard').getAttribute('aria-pressed') === 'true');
+      await page.keyboard.press('KeyF');
+      await page.waitForFunction(() => globalThis.__MOCK__.S().priv.shop.frozen);
+      assert.equal(await page.$eval('.lvcard', (el) => el.getAttribute('aria-pressed')), 'true', 'an unrelated shop update keeps the selection');
+      await page.click('.shopbar .lvcard');
+      await page.waitForFunction((lv) => globalThis.__MOCK__.S().priv.shop.level === lv + 1, {}, before.shop.level);
+      const upgraded = await mockState(page);
+      assert.equal(upgraded.funds, before.funds - before.shop.upgradePrice);
+      assert.equal(await page.$eval('.lvcard', (el) => el.getAttribute('aria-pressed')), 'false');
+      await page.click('.shopbar .lvcard');
+      await page.waitForFunction(() => document.querySelector('.lvcard').getAttribute('aria-pressed') === 'true');
+      await sleep(300);
+      assert.equal((await mockState(page)).shop.level, upgraded.shop.level);
+      assert.equal((await mockState(page)).funds, upgraded.funds);
+      assert.deepEqual(problems.filter((p) => p.startsWith('pageerror:')), []);
+    } finally { await page.close(); }
+  });
+
+  test('prep: a level change preserves another shop card selection', async () => {
+    const { page, problems } = await open('phase=PREP', { render: 'fallback' });
+    try {
+      await page.evaluate(() => globalThis.__MOCK__.mutate((S) => { S.priv.funds = 100; }));
+      const before = await mockState(page);
+      await page.click('.shopbar__cards .scard:not(.scard--sold)');
+      await page.waitForSelector('.shopbar__cards .scard.is-armed');
+      const selected = await page.$eval('.shopbar__cards .scard.is-armed', (el) => el.getAttribute('aria-label'));
+      await page.keyboard.press('KeyD');
+      await page.waitForFunction((lv) => globalThis.__MOCK__.S().priv.shop.level === lv + 1, {}, before.shop.level);
+      assert.equal(await page.$eval('.shopbar__cards .scard.is-armed', (el) => el.getAttribute('aria-label')), selected);
+      assert.equal(await page.$eval('.lvcard', (el) => el.getAttribute('aria-pressed')), 'false');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.scard.is-armed', { hidden: true });
+      assert.deepEqual(problems.filter((p) => p.startsWith('pageerror:')), []);
+    } finally { await page.close(); }
+  });
+
+  // Q / X act on the HOVERED operator (PR #629, DESIGN §32.14.22): no click needed, a selection alone does nothing
+  test('prep: Q retreats and X sells only the hovered operator', async () => {
     const { page, problems } = await open('phase=PREP', { render: 'fallback' });
     const initial = await mockState(page);
+    await page.mouse.move(5, 5);
     await page.keyboard.press('KeyQ');
     await page.keyboard.press('KeyX');
-    assert.deepEqual(await mockState(page), initial, 'no selection means no action');
+    assert.deepEqual(await mockState(page), initial, 'nothing hovered means no action');
     const unit = initial.board.find((piece) => piece.kind === 'chess' && !piece.golden);
-    await page.click(`.ff-piece[data-uid="${unit.uid}"]`);
-    await page.waitForSelector('.uframe__btn--retreat');
+    // as test/ui/hover-hotkeys.e2e.test.js: the piece's current screen rect, then wait for the live hit test to see it
+    const hover = async (uid) => {
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const point = await page.evaluate((u) => {
+        const r = globalThis.__SP_VIEW__.pieceScreenRect(u);
+        return r && { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      }, uid);
+      assert.ok(point, `piece ${uid} has a screen position`);
+      await page.mouse.move(point.x, point.y);
+      await page.waitForFunction((u, x, y) => globalThis.__SP_VIEW__.pieceAtClientPoint(x, y) === u, {}, uid, point.x, point.y);
+    };
     await page.evaluate(() => {
       const input = document.createElement('input');
       input.id = 'shortcut-test-input';
       document.body.append(input);
       input.focus();
     });
+    await hover(unit.uid);
     await page.keyboard.press('KeyQ');
     await page.keyboard.press('KeyX');
     assert.deepEqual(await mockState(page), initial, 'typing must not retreat or sell');
     await page.evaluate(() => document.getElementById('shortcut-test-input').remove());
+    await hover(unit.uid);
     await page.keyboard.press('KeyQ');
     await page.waitForFunction((uid) => globalThis.__MOCK__.S().priv.hand.some((piece) => piece?.uid === uid), {}, unit.uid);
     const retreated = await mockState(page);
     assert.ok(!retreated.board.some((piece) => piece.uid === unit.uid));
     assert.equal(retreated.funds, initial.funds, 'retreat does not sell');
-    await page.click(`.ff-piece[data-uid="${unit.uid}"]`);
-    await page.waitForSelector('.uframe__btn--sell');
-    assert.equal(await page.$('.uframe__btn--retreat'), null, 'bench operator cannot retreat');
+    await hover(unit.uid);
     await page.keyboard.press('KeyQ');
     assert.deepEqual(await mockState(page), retreated, 'Q on the bench does nothing');
     await page.keyboard.press('KeyX');
     await page.waitForFunction((uid) => !globalThis.__MOCK__.S().priv.hand.some((piece) => piece?.uid === uid), {}, unit.uid);
-    assert.ok((await mockState(page)).funds > retreated.funds, 'X sells the selected operator');
+    assert.ok((await mockState(page)).funds > retreated.funds, 'X sells the hovered operator');
     const item = (await mockState(page)).hand.find((piece) => piece?.kind === 'item');
-    await page.click(`.ff-piece[data-uid="${item.uid}"]`);
-    await page.waitForSelector('.uframe__btn--destroy');
+    await hover(item.uid);
     await page.keyboard.press('KeyX');
     assert.ok((await mockState(page)).hand.some((piece) => piece?.uid === item.uid), 'X must not destroy an item');
     assert.equal(await page.$('.modal'), null, 'no destroy confirmation');
@@ -245,18 +401,14 @@ describe('in-match UI (mock harness, headless Chrome)', { skip: !ENABLED && 'set
     const { page, problems } = await open('phase=PREP');
     await sleep(1500); // spine models
     const rect = (uid) => page.evaluate((u) => { const r = globalThis.__SP_VIEW__?.pieceScreenRect(u); return r && { x: r.left + r.width / 2, y: r.top + r.height * 0.65 }; }, uid);
-    const drag = async (from, to) => {
-      await page.mouse.move(from.x, from.y);
-      await page.mouse.down();
-      for (let i = 1; i <= 12; i++) { await page.mouse.move(from.x + ((to.x - from.x) * i) / 12, from.y + ((to.y - from.y) * i) / 12); await sleep(16); }
-      await sleep(100);
-      await page.mouse.up();
-      await sleep(600);
-    };
+    // (aimed after the pickup: the deploy fold zooms the board as a piece is picked up — GitHub #602, e2e/client.mjs)
+    const drag = async (from, to, o = {}) => { await aimedDrag(page, from, to, { steps: 12, pause: 16, settle: 100, ...o }); await sleep(600); };
+    const centre = (sel) => page.$eval(sel, (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }).catch(() => null);
     let s = await mockState(page);
     const unit = s.board.find((x) => x.kind === 'chess' && !x.golden && !(x.items || []).length);
-    const bar = await page.$eval('.shopbar__cards', (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
-    await drag(await rect(unit.uid), bar);
+    const bar = await centre('.shopbar__cards');
+    // the shop bar folds away while a piece is carried (GitHub #602): released over its tab — DOM UI — the piece goes back
+    await drag(await rect(unit.uid), bar, { retarget: () => centre('.shopbar-tab') });
     assert.equal((await mockState(page)).board.length, s.board.length, 'no drag-to-sell');
     const pt = await rect(unit.uid);
     await page.mouse.click(pt.x, pt.y);
@@ -277,10 +429,13 @@ describe('in-match UI (mock harness, headless Chrome)', { skip: !ENABLED && 'set
     assert.equal(s.hand.find((x) => x && x.uid === target.uid).dir, undefined, 'bench pieces carry no direction');
     // re-orient in place: drop the unit on its own tile → wheel → UP (no duplicate piece)
     const here = await rect(hc.uid);
+    const home = await groundAnchor(page, here);
     await page.mouse.move(here.x, here.y);
     await page.mouse.down();
     for (let i = 1; i <= 8; i++) { await page.mouse.move(here.x + i * 12, here.y - i * 6); await sleep(16); } // off the tile…
-    for (let i = 7; i >= 0; i--) { await page.mouse.move(here.x + i * 12, here.y - i * 6); await sleep(16); } // …and back onto it
+    await cameraSettled(page); // (the deploy fold's zoom, GitHub #602)
+    const back = (await anchorPoint(page, home)) || here;
+    for (let i = 1; i <= 8; i++) { await page.mouse.move(here.x + 96 + ((back.x - here.x - 96) * i) / 8, here.y - 48 + ((back.y - here.y + 48) * i) / 8); await sleep(16); } // …and back onto it
     await sleep(100);
     await page.mouse.up();
     await sleep(600);
@@ -341,6 +496,135 @@ describe('in-match UI (mock harness, headless Chrome)', { skip: !ENABLED && 'set
     await sleep(300);
     const txt = await page.$eval('.brief-ready__txt', (el) => el.textContent);
     assert.match(txt, /3/);
+    assert.deepEqual(problems, []);
+    await page.close();
+  });
+
+  test('教鞭: PREP cards confirm twice, use its timer, reset on a new ID; old replies cannot clear a new busy pick', async () => {
+    const { page, problems } = await open('phase=PREP', { render: 'fallback' });
+    await page.click('.gm__gear');
+    await page.waitForSelector('.modal .set-keys');
+    await page.click('.set-key[data-action="ready"]');
+    await page.waitForSelector('.set-key.is-waiting[data-action="ready"]');
+    await page.keyboard.press('KeyW');
+    await page.waitForFunction(() => document.querySelector('.set-key[data-action="ready"]')?.textContent.trim() === 'W');
+    await page.click('.modal__actions .btn--primary');
+    await page.waitForSelector('.modal', { hidden: true });
+    const deadline = await page.evaluate(() => globalThis.__MOCK__.S().pub.deadline);
+    const first = await useWhip(page);
+    await page.waitForSelector('.spov[aria-label="教鞭选择"]');
+    assert.equal(await page.evaluate(() => globalThis.__MOCK__.S().pub.deadline), deadline);
+    assert.equal(await page.$('.spov__order'), null);
+    assert.ok(await page.$('.spov .countdown'));
+    assert.doesNotMatch(await page.$eval('.spov', (el) => el.textContent), /机变阶段|当前轮到|正在决策/);
+    assert.equal(await page.$eval('.readybtn', (el) => el.disabled), true);
+    assert.match(await page.$eval('[data-testid="ready-why"]', (el) => el.textContent), /请先完成教鞭选择/);
+    await page.evaluate(async () => { await (await import('/js/ui/lang.js')).loadLangIndex(); });
+    for (const lang of ['en', 'ja', 'ko', 'zh-TW']) {
+      const messages = JSON.parse(readFileSync(path.join(ROOT, `public/i18n/${lang}.json`), 'utf8'));
+      await page.evaluate(async (code) => {
+        await (await import('/js/ui/lang.js')).switchLang(code);
+        globalThis.__MOCK__.pushPublic(); // this harness has no App/useLang root; render again with the active language
+      }, lang);
+      await page.waitForFunction((label) => document.querySelector('.spov')?.getAttribute('aria-label') === label, {}, messages['教鞭选择']);
+      assert.equal(await page.$eval('.spov__title', (el) => el.textContent), `${messages['教鞭 · 战术特训']}|${messages['请选择一项战术特训']}`);
+      assert.match(await page.$eval('.spov__sub', (el) => el.textContent), new RegExp(messages['休整期结束时未选择将自动选定']));
+      assert.equal(await page.$eval('[data-testid="ready-why"]', (el) => el.textContent), messages['请先完成教鞭选择']);
+      assert.equal((await mockState(page)).personalChoice.id, first.id, 'language switch keeps the same pending offer');
+    }
+    await page.evaluate(async () => { await (await import('/js/ui/lang.js')).switchLang('zh'); globalThis.__MOCK__.pushPublic(); });
+    await page.waitForSelector('.spov[aria-label="教鞭选择"]');
+    const requests = await page.evaluate(() => globalThis.__MOCK__.S().requests.length);
+    for (const key of ['KeyW', 'KeyR', 'KeyF', 'KeyD', 'KeyQ', 'KeyX']) await page.keyboard.press(key);
+    await sleep(150);
+    assert.equal(await page.evaluate(() => globalThis.__MOCK__.S().requests.length), requests, 'background shortcuts send no intents');
+    assert.match(await page.$$eval('.toast', (els) => els.map((el) => el.textContent).join('\n')), /请先完成教鞭选择/);
+    assert.equal(await page.$eval('.readybtn__key', (el) => el.textContent), 'W');
+    await page.click('.spcard.is-pickable');
+    await page.waitForSelector('.spcard.is-armed');
+    await sleep(200); // the overlay attaches its Escape listener in an effect, a frame after the highlight shows
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('.spcard.is-armed'));
+    assert.equal((await mockState(page)).personalChoice.id, first.id, 'Escape only removes the highlight');
+    await page.screenshot({ path: path.join(OUT, 'ui-personal-choice-1920.png') });
+    await page.evaluate(async (id) => {
+      const { net } = await import('/js/net.js');
+      const request = net.request;
+      globalThis.__choiceReplies = {};
+      net.request = async (t, fields) => {
+        if (t !== 'g.choice' || fields.choiceId === undefined) return request(t, fields);
+        if (fields.choiceId === id) {
+          const result = await request(t, fields);
+          await new Promise((resolve) => { globalThis.__choiceReplies[fields.choiceId] = resolve; });
+          return result;
+        }
+        await new Promise((resolve) => { globalThis.__choiceReplies[fields.choiceId] = resolve; });
+        return request(t, fields);
+      };
+    }, first.id);
+    await page.click('.spcard.is-pickable');
+    assert.equal((await mockState(page)).personalChoice.id, first.id, 'one tap does not apply it');
+    await page.click('.spcard.is-armed');
+    await page.waitForFunction(() => !document.querySelector('.spov'));
+    const firstRequest = await page.evaluate(() => globalThis.__MOCK__.S().requests.filter(([t]) => t === 'g.choice').at(-1));
+    assert.deepEqual(firstRequest, ['g.choice', { idx: 0, choiceId: first.id }]);
+    const second = await useWhip(page);
+    await page.waitForSelector('.spov');
+    await page.click('.spcard.is-pickable');
+    await page.waitForSelector('.spcard.is-armed');
+    const thirdId = second.id + '.next';
+    await page.evaluate((id) => globalThis.__MOCK__.mutate((S) => { S.pub.deadline = 0; S.priv.personalChoice.id = id; }), thirdId);
+    await page.waitForFunction(() => !document.querySelector('.spcard.is-armed'));
+    assert.equal(await page.$('.spov .countdown'), null, 'co-op PREP without a deadline is untimed');
+    await page.click('.spcard.is-pickable');
+    await page.click('.spov__confirm');
+    await page.waitForSelector('.spcard.is-busy');
+    await page.waitForFunction((id) => !!globalThis.__choiceReplies[id], {}, first.id);
+    await page.evaluate((id) => globalThis.__choiceReplies[id](), first.id);
+    await sleep(150);
+    assert.ok(await page.$('.spcard.is-busy'), 'old reply leaves the newer choice busy');
+    await page.evaluate((id) => globalThis.__choiceReplies[id](), thirdId);
+    await page.waitForFunction(() => !document.querySelector('.spov'));
+    assert.equal((await mockState(page)).personalChoice, null);
+    assert.deepEqual(problems, []);
+    await page.close();
+  });
+
+  test('教鞭 appearing cancels the uncommitted direction wheel and active drag, releasing its held piece', async () => {
+    const { page, problems } = await open('phase=PREP', { render: 'fallback' });
+    const s = await mockState(page);
+    const hand = s.hand.find((p) => p && p.kind === 'chess');
+    const target = s.board.find((p) => p.kind === 'chess' && p.row === 9);
+    const selector = `.ff-piece[data-uid="${hand.uid}"]`;
+    const center = (sel) => page.$eval(sel, (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+    const homeStyle = await page.$eval(selector, (el) => el.style.transform);
+    const from = await center(selector), to = await center(`.ff-piece[data-uid="${target.uid}"]`);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 12 });
+    await sleep(80);
+    await page.mouse.up();
+    await page.waitForSelector('.fwheel');
+    await useWhip(page);
+    await page.waitForSelector('.spov');
+    await page.waitForFunction(() => !document.querySelector('.fwheel'));
+    await page.waitForFunction((sel, transform) => document.querySelector(sel)?.style.transform === transform, {}, selector, homeStyle);
+    assert.equal(await page.$eval(selector, (el) => el.style.transform), homeStyle, 'cancelFacing released the held bench piece');
+    assert.equal(await page.$('.ff-piece.is-draggable'), null);
+    await page.click('.spcard.is-pickable');
+    await page.click('.spov__confirm');
+    await page.waitForFunction(() => !document.querySelector('.spov'));
+    const current = await center(selector);
+    await page.mouse.move(current.x, current.y);
+    await page.mouse.down();
+    await page.mouse.move(current.x + 90, current.y - 40, { steps: 8 });
+    await page.waitForSelector('.gm.is-dragging');
+    await useWhip(page);
+    await page.waitForSelector('.spov');
+    await page.waitForFunction(() => !document.querySelector('.gm.is-dragging, .ff-piece.is-lifted'));
+    await page.mouse.up();
+    assert.deepEqual((await mockState(page)).board, s.board);
+    assert.ok(!(await page.evaluate(() => globalThis.__MOCK__.S().requests.some(([t]) => t === 'g.move'))));
     assert.deepEqual(problems, []);
     await page.close();
   });
@@ -480,10 +764,8 @@ describe('in-match UI (mock harness, headless Chrome)', { skip: !ENABLED && 'set
         const tt = v.tileScreen(row, col);
         return { uid: piece.uid, row, col, from: { x: r.left + r.width / 2, y: r.top + r.height * 0.6 }, to: { x: tt.x, y: tt.y } };
       });
-      const m = page.mouse;
-      await m.move(plan.from.x, plan.from.y); await m.down();
-      for (let i = 1; i <= 14; i++) { await m.move(plan.from.x + ((plan.to.x - plan.from.x) * i) / 14, plan.from.y + ((plan.to.y - plan.from.y) * i) / 14); await sleep(16); }
-      await sleep(120); await m.up();
+      // (aimed after the pickup: the deploy fold zooms the boss-field half as a piece is picked up — GitHub #602)
+      await aimedDrag(page, plan.from, plan.to, { steps: 14, pause: 16, settle: 120 });
       await swipeWheel(page, 'RIGHT');
       await page.waitForFunction((uid) => globalThis.__MOCK__.S().priv.board.some((b) => b.uid === uid), { timeout: 4000 }, plan.uid);
       const sent = await page.evaluate(() => globalThis.__MOCK__.S().requests.filter((r) => r[0] === 'g.move').pop()[1]);
@@ -526,7 +808,8 @@ describe('in-match UI (mock harness, headless Chrome)', { skip: !ENABLED && 'set
       assert.deepEqual([...new Set(shown.map((x) => x[0]))].sort(), [...new Set(theirs.map((e) => e.enemyKey))].sort());
       if (render === 'engine') assert.ok(shown.every((x) => x[1] >= 17), 'their upper-gate enemies stand in rows 17–18');
       await page.click('.gtop__iconbtn');
-      await page.waitForFunction(() => document.querySelector('.gm')?.dataset.camera === 'normal', { timeout: 3000 });
+      // a scouted prep board frames like the own prep with the shop folded (PR #129), so the pen returns to 'prep'
+      await page.waitForFunction(() => document.querySelector('.gm')?.dataset.camera === 'prep', { timeout: 3000 });
       assert.ok(await page.$('.gm__watching'), 'still scouting the teammate');
       await page.click('.gm__watching button');
       await page.waitForFunction(() => document.querySelector('.gm')?.dataset.camera === 'prep', { timeout: 3000 });
@@ -635,6 +918,50 @@ describe('in-match UI (mock harness, headless Chrome)', { skip: !ENABLED && 'set
     });
   }
 
+  test('session replacement: recovery action stays clickable above the AI away overlay', async () => {
+    const { page, problems } = await open('phase=PREP', { render: 'fallback' });
+    await page.click('.gtop__exit');
+    await page.waitForSelector('.modal');
+    const buttons = await page.$$('.modal__actions .btn');
+    await buttons[1].click(); // 暂离
+    await page.waitForSelector('.awayov[aria-label="AI 托管中"]', { visible: true });
+    await page.evaluate(async () => {
+      const { net } = await import('/js/net.js');
+      globalThis.__RECOVERY_CONNECTS__ = 0;
+      net.connect = () => { globalThis.__RECOVERY_CONNECTS__++; };
+      globalThis.__MOCK__.store.set({ connection: { status: 'closed', ping: 0, attempt: 0, retryAt: 0, lastError: { code: 'REPLACED' }, everOnline: true } });
+    });
+    await page.waitForSelector('.conn-banner .btn', { visible: true });
+    await sleep(300);
+    assert.deepEqual(await page.evaluate(() => {
+      const conn = globalThis.__MOCK__.store.get().connection;
+      return [conn.status, conn.lastError.code];
+    }), ['closed', 'REPLACED']);
+    assert.ok(await page.$('.awayov'), 'the away overlay remains during recovery');
+    assert.match(await page.$eval('.conn-banner', (el) => el.textContent), /该身份已在其他页面登录/);
+    assert.equal(await page.$eval('.conn-banner .btn', (el) => el.textContent.trim()), '在此页面继续');
+    const center = await page.$eval('.conn-banner .btn', (btn) => {
+      const r = btn.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      return { x, y, hit: btn.contains(document.elementFromPoint(x, y)) };
+    });
+    assert.ok(center.hit, 'the recovery button receives pointer input above the away overlay');
+    await page.screenshot({ path: path.join(OUT, 'ui-recovery-above-away.png') });
+    await page.evaluate(async () => {
+      const { confirmDialog } = await import('/js/ui/components.js');
+      void confirmDialog({ title: 'Recovery layering check', text: 'Global dialog stays above connection recovery.' });
+    });
+    await page.waitForSelector('.modal');
+    assert.equal(await page.$eval('.conn-banner .btn', btn => {
+      const r = btn.getBoundingClientRect(); return btn.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+    }), false, 'the connection banner does not steal input from a global modal');
+    await page.keyboard.press('Escape'); await page.waitForSelector('.modal', { hidden: true });
+    await page.mouse.click(center.x, center.y);
+    assert.equal(await page.evaluate(() => globalThis.__RECOVERY_CONNECTS__), 1, 'the pointer click invokes the recovery action');
+    assert.deepEqual(problems.filter((p) => p.startsWith('pageerror:')), []);
+    await page.close();
+  });
+
   test('watch: the other pair of the Final Assault is refused and the eye stays put', async () => {
     const { page, problems } = await open('phase=FINAL_ASSAULT');
     const rows = await page.$$('.team__row');
@@ -736,8 +1063,54 @@ describe('in-match UI (mock harness, headless Chrome)', { skip: !ENABLED && 'set
 
   test('result: no Hidden Core medal when R15 was never reached', async () => {
     const { page, problems } = await open('phase=RESULT&variant=defeat');
+    // the settlement flow: intro → my report (lost: no leader medals) → 下一步 → the team page → 数据详情
+    await page.waitForSelector('[data-testid="settle-self"]', { timeout: 10000 });
+    assert.equal(await page.$('.smedal'), null, 'a lost match earns no medal on my report');
+    await page.waitForSelector('.settle__next', { visible: true });
+    await page.click('.settle__next');
+    await page.waitForSelector('[data-testid="settle-team"]', { timeout: 5000 });
+    await page.click('.steam__detail');
+    await page.waitForSelector('[data-testid="settle-detail"] .medal', { timeout: 5000 });
     assert.equal(await page.$('.medal--hidden'), null);
     assert.ok(await page.$('.medal'), 'the leader medal is still shown');
+    assert.equal(await page.$$eval('[data-ui-slot="result.tab"]', (els) => els.length), 1, 'one 结算 tab plugin slot: the team page\'s, not the report\'s');
+    assert.deepEqual(problems, []);
+    await page.close();
+  });
+
+  test('result: the settlement flow — intro, my report with the level strip, the team page, back', async () => {
+    const { page, problems } = await open('phase=RESULT');
+    await page.waitForSelector('[data-testid="settle-self"]', { timeout: 10000 });
+    const self = await page.evaluate(() => ({
+      title: document.querySelector('.sself__title')?.textContent,
+      slots: document.querySelectorAll('.sops .sop').length,
+      empty: document.querySelectorAll('.sops .sop.is-empty').length,
+      medals: document.querySelectorAll('.smedal').length,
+      gain: document.querySelector('.slv__gain')?.textContent || '',
+      daily: document.querySelector('.slv__gain--daily')?.textContent || '',
+    }));
+    assert.equal(self.title, '模拟完成');
+    assert.equal(self.slots, 10, 'ten lineup slots');
+    assert.ok(self.empty >= 1, 'the slots past the lineup are NO INFO cards');
+    assert.equal(self.medals, 1, 'the leader medal (the Hidden Core was never reached)');
+    assert.match(self.gain, /获得卫戍认证 \+\d+/);
+    assert.match(self.daily, /每日防卫目标 \+\d+/);
+    await page.waitForSelector('.settle__next', { visible: true });
+    await page.click('.settle__next');
+    await page.waitForSelector('[data-testid="settle-team"]', { timeout: 5000 });
+    assert.equal(await page.$$eval('.tcard', (els) => els.length), 4, 'one card per seat');
+    assert.ok(await page.$('.tcard.is-self'), 'my own card is marked');
+    assert.equal(await page.$$eval('[data-ui-slot="result.tab"]', (els) => els.length), 1, 'the 结算 tab plugin slot');
+    assert.equal(await page.$('[data-testid="unofficial-mark"]'), null, 'the original game: no 非官方 mark');
+    assert.deepEqual(problems, []);
+    await page.close();
+  });
+
+  test('result: the RESULT phase before m.result — the flow waits for it and still opens on my own report', async () => {
+    const { page, problems } = await open('phase=RESULT&variant=late');
+    await page.waitForSelector('[data-testid="settle-self"]', { timeout: 10000 });
+    assert.equal(await page.$eval('.sself__title', (el) => el.textContent), '模拟完成');
+    assert.equal(await page.$('[data-testid="settle-team"]'), null, 'a seat starts with 个人战报, not the spectators\' 同盟 page');
     assert.deepEqual(problems, []);
     await page.close();
   });
@@ -748,14 +1121,8 @@ describe('in-match UI (mock harness, headless Chrome)', { skip: !ENABLED && 'set
     await sleep(1500); // spine models
     const at = (uid, fy) => page.evaluate((u, f) => { const r = globalThis.__SP_VIEW__?.pieceScreenRect(u); return r && { x: r.left + r.width / 2, y: r.top + r.height * f }; }, uid, fy);
     const tileAt = (row, col) => page.evaluate((r, c) => { const x = globalThis.__SP_VIEW__?.raw?.tileScreen?.(r, c); return x && { x: x.x, y: x.y }; }, row, col);
-    const drag = async (from, to) => {
-      await page.mouse.move(from.x, from.y);
-      await page.mouse.down();
-      for (let i = 1; i <= 12; i++) { await page.mouse.move(from.x + ((to.x - from.x) * i) / 12, from.y + ((to.y - from.y) * i) / 12); await sleep(16); }
-      await sleep(120);
-      await page.mouse.up();
-      await sleep(600);
-    };
+    // (aimed after the pickup: the deploy fold zooms the board as a piece is picked up — GitHub #602, e2e/client.mjs)
+    const drag = async (from, to) => { await aimedDrag(page, from, to, { steps: 12, pause: 16, settle: 120 }); await sleep(600); };
     let s = await mockState(page);
     const targets = s.board.filter((x) => x.kind === 'chess' && !(x.items || []).length).sort((a, b) => a.row - b.row);
     const items = s.hand.filter((x) => x && x.kind === 'item');
@@ -801,11 +1168,8 @@ describe('in-match UI (mock harness, headless Chrome)', { skip: !ENABLED && 'set
         }
         assert.ok(to, 'found an empty board tile on screen');
       }
-      await page.mouse.move(from.x, from.y);
-      await page.mouse.down();
-      for (let i = 1; i <= 12; i++) { await page.mouse.move(from.x + ((to.x - from.x) * i) / 12, from.y + ((to.y - from.y) * i) / 12); await sleep(16); }
-      await sleep(120);
-      await page.mouse.up();
+      // (aimed after the pickup on the engine: the deploy fold zooms the board — GitHub #602, e2e/client.mjs)
+      await aimedDrag(page, from, to, { steps: 12, pause: 16, settle: 120 });
       await sleep(500);
       const toastText = await page.$eval('.toast', (el) => el.textContent).catch(() => null);
       assert.match(String(toastText), /已达到部署上限|无法部署在该位置|近战单位只能部署在地面/, `${render}: toast explains the refusal`);

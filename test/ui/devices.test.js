@@ -131,18 +131,6 @@ describe('ui/device.js feature detection', () => {
 });
 
 describe('ui/device.js installDeviceSupport', () => {
-  test('APK keeps controls clear of system bars without changing browser safe areas', () => {
-    const browser = fakeWindow();
-    installDeviceSupport(browser.win)();
-    assert.equal(browser.props.has('--android-sa-t'), false);
-
-    const app = fakeWindow();
-    app.win.StrongholdAndroid = { safeInsets: () => '24,38,0,0' };
-    installDeviceSupport(app.win)();
-    assert.equal(app.props.get('--android-sa-t'), '24px');
-    assert.equal(app.props.get('--android-sa-r'), '38px');
-    assert.equal(app.props.get('--android-sa-b'), '0px');
-  });
   test('classes, --sp-vh, zoom gestures cancelled, long press → contextmenu (once), click after it swallowed', async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] });
     const f = fakeWindow({ media: { '(any-pointer: coarse)': true }, touchPoints: 5 });
@@ -392,8 +380,9 @@ describe('room: copy the invite without navigator.clipboard (LAN over http, iOS)
     const ta = {
       style: {}, value: '',
       setAttribute(k) { calls.push(['attr', k]); },
+      focus() { document.activeElement = ta; },
       select() { calls.push(['select']); },
-      setSelectionRange(a, b) { calls.push(['range', a, b]); },
+      setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; calls.push(['range', a, b]); },
       remove() { calls.push(['remove']); },
     };
     const saved = { document: globalThis.document, secure: globalThis.isSecureContext, nav: Object.getOwnPropertyDescriptor(globalThis, 'navigator') };

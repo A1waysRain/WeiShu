@@ -1,4 +1,5 @@
 // server/match/audit.js — rule auditor for sweeps and tests (tools/matchrun.mjs --check, test/match/fullmatch.test.js).
+// (i18n-ignore-file: developer reports in English with the game's terms, never shown to players — docs/I18N.md)
 //
 // attachAudit(m) wraps a live Match's phase transitions and a few prep handlers (instance-level wrappers; the engine
 // is untouched) and records every rule violation it observes, next to the structural invariants of invariants.js:
@@ -8,9 +9,9 @@
 //                 the next prep to end; a piece that got into temp by other means counts as due at the prep in
 //                 progress when it is first seen at a prep end. No temp piece may outlive its due prep.
 //   prep end      leftover funds lost (carry bands excepted), temp resolved (only pieces due at a later prep stay),
-//                 reward offers expired
+//                 queued reward offers kept until picked (2026-10-15)
 //   round start   income = config income(r) (= min(3 + r, 12)) + pending funds, upgrade price −1 (floor 0) from R2,
-//                 temp not wiped (nothing overdue), offers earned after the last prep kept, frozen slots kept in
+//                 temp not wiped (nothing overdue), every queued offer kept, frozen slots kept in
 //                 place (same id; chess slots keep their index, the item slot(s) follow the chess slots, so a
 //                 level-up moves them right), everything else rerolled with tier ≤ shop level from the unbanned pool,
 //                 freeze toggle released
@@ -29,7 +30,7 @@
 //                 units > seat, research 08 §5); leakers = players with counted leaks
 //   settle        no unite ⇒ loss = min(cap, counted leaks); after 联防 a leaker loses ≤ cap (its leaked enemies'
 //                 offspring count too), everybody else ≤ min(cap, own counted leaks); LP ≤ 0 ⇔ eliminated
-//   final assault fields pair alive players by seat, team LP = Σ alive LP, boss pool = bossPoolHp(); hidden core only
+//   final assault fields follow the saved per-match pairs, team LP = Σ alive LP, boss pool = bossPoolHp(); hidden core only
 //                 after a win when hiddenEligible() holds
 //   result        each title ≤ once, ≤ 1 title per player, onlyOnWin titles only on a win, roundsPassed per player,
 //                 Σ alive players' LP = the merged team LP after the Final Assault
@@ -43,7 +44,7 @@
 import { PHASE } from '../../shared/constants.js';
 import { collectViolations } from './invariants.js';
 import { mergeTile, pieceDir, canPlace, placeClass } from './board.js';
-import { pairPlayers, bossPoolHp, hiddenEligible } from './finalAssault.js';
+import { bossPoolHp, hiddenEligible } from './finalAssault.js';
 import { helperOrder } from './unite.js';
 import { BAND_TURN_SECONDS } from './Match.js';
 
@@ -127,7 +128,10 @@ export function attachAudit(m, { invariants = true, limit = 200 } = {}) {
         check('shop roll', () => {
           const base = gd.baseIdOf(s.id);
           if (t > ps.shop.level) fail(`${ps.playerId}: rolled tier ${t} at shop level ${ps.shop.level}`);
-          if (!m.pool.has(base)) fail(`${ps.playerId}: rolled ${s.id} outside the match pool (banned/hidden)`);
+          // (a slotted 自选 piece comes from the player's own stock, 0.2.0 player/diy.js — once the 调度中心 is at its level)
+          const diy = ps.diyStock && ps.diyStock.has(base) ? ps.diyStock.entries.get(base) : null;
+          if (!m.pool.has(base) && !diy) fail(`${ps.playerId}: rolled ${s.id} outside the match pool (banned/hidden)`);
+          if (diy && ps.shop.level < diy.shopLevel) fail(`${ps.playerId}: rolled 自选 ${s.id} at shop level ${ps.shop.level} < ${diy.shopLevel}`);
           if (s.basePrice !== gd.chessPrice(s.id)) fail(`${ps.playerId}: ${s.id} basePrice ${s.basePrice} != ${gd.chessPrice(s.id)}`);
         });
       }
@@ -159,8 +163,8 @@ export function attachAudit(m, { invariants = true, limit = 200 } = {}) {
         if (ps.pendingFunds !== 0) fail(`${id}: pending funds not cleared`);
         // temp is not wiped here: what overflowed after the last prep's deadline is shown in this prep
         overdue(ps, 'the round start');
-        // offers of the last prep expired at its end; the ones queued after it (SETTLE merges) wait for this prep
-        if (offers0.some((o) => !ps.offers.includes(o))) fail(`${id}: a reward offer earned after the prep was dropped at the round start`);
+        // queued reward offers last until picked: none is dropped at the round start (the maintainer's decision of 2026-10-15)
+        if (offers0.some((o) => !ps.offers.includes(o))) fail(`${id}: a queued reward offer was dropped at the round start`);
         if (ps.shop.frozen) fail(`${id}: freeze toggle still on after the round start`);
         const { chess, item } = gd.shopSlots(ps.shop.level);
         if (ps.shop.slots.length !== chess + item) fail(`${id}: ${ps.shop.slots.length} shop slots at level ${ps.shop.level}, expected ${chess}+${item}`);
@@ -217,12 +221,23 @@ export function attachAudit(m, { invariants = true, limit = 200 } = {}) {
       const price = ps.shop.upgradePrice;
       const f0 = ps.funds;
       const fx = hasSpendEffects(m, ps);
+      const slots0 = ps.shop.slots.slice();
+      const layout0 = ps.shop.layout || { chess: slots0.length, item: 0 };
       const res = orig();
       if (res && res.ok) check('levelUp', () => {
         if (ps.shop.level !== lv + 1) fail(`${ps.playerId}: level ${lv} → ${ps.shop.level}`);
         if (f0 - ps.funds !== price && !fx && !hasSpendEffects(m, ps)) fail(`${ps.playerId}: level-up paid ${f0 - ps.funds}, price ${price}`);
         const next = gd.upgradeBase(ps.shop.level) ?? 0;
         if (ps.shop.upgradePrice !== next) fail(`${ps.playerId}: upgrade price after level-up ${ps.shop.upgradePrice}, expected ${next}`);
+        // the new level's extra slots open at once, empty (GitHub #332 / PR #333); the cards shown before stay in place
+        const { chess, item } = gd.shopSlots(ps.shop.level);
+        const want = Math.max(chess, layout0.chess) + Math.max(item, layout0.item);
+        if (ps.shop.slots.length !== want) fail(`${ps.playerId}: ${ps.shop.slots.length} shop slots after the level-up to ${ps.shop.level}, expected ${want}`);
+        const layout = ps.shop.layout || layout0;
+        slots0.forEach((s, i) => {
+          const at = i < layout0.chess ? i : layout.chess + (i - layout0.chess);
+          if (ps.shop.slots[at] !== s) fail(`${ps.playerId}: shop slot ${i} changed by the level-up`);
+        });
       });
       return res;
     });
@@ -243,13 +258,13 @@ export function attachAudit(m, { invariants = true, limit = 200 } = {}) {
         if (ps.deployCount > deployed0) fail(`${id}: a merge of ${baseId} grew the deploy count ${deployed0} → ${ps.deployCount}`);
         // a pure read of the deploy field (Match.deployMapFor, as invariants.js): the audit must not refresh the cache
         const dmap = typeof m.deployMapFor === 'function' ? m.deployMapFor(ps) : ps.deployMap();
-        const pos = placeClass(ps, gd.chess(elite.id));
+        const pos = placeClass(ps, (ps.gd || gd).chess(elite.id));
         const want = mergeTile([...tiles.keys()].map((key) => ({ key })), (r, c) => canPlace(dmap, pos, r, c));
         if (want) {
           if (loc.area !== 'board' || loc.key !== want.key) fail(`${id}: the elite of ${baseId} went to ${loc.area} ${loc.key || ''}, expected the deployed copy's tile ${want.key}`);
           else if (pieceDir(elite) !== tiles.get(want.key)) fail(`${id}: the elite of ${baseId} faces ${pieceDir(elite)}, its copy faced ${tiles.get(want.key)}`);
-        } else if (loc.area === 'board' && (!tiles.has(loc.key) || ps.hand.some((x) => x == null) || ps.temp.some((x) => x == null))) {
-          // only the no-room fallback (hand and temp full, no deployed tile legal for it) leaves it on a copy's tile
+        } else if (loc.area === 'board') {
+          // Without a legal consumed tile, the elite must use the hand or expandable temp queue.
           fail(`${id}: the elite of ${baseId} took tile ${loc.key} although no consumed copy stood on a legal tile`);
         }
       });
@@ -264,7 +279,6 @@ export function attachAudit(m, { invariants = true, limit = 200 } = {}) {
         // leftover funds are lost at prep end (carry bands excepted); gains after this (SETTLE effects) are kept
         if (ps.funds !== 0 && !carries(ps)) fail(`${ps.playerId}: kept ${ps.funds} funds past the prep end without a carry band`);
         overdue(ps, 'its prep end');
-        if (ps.offers.length) fail(`${ps.playerId}: reward offer survived the prep end`);
       });
       return res;
     });
@@ -362,7 +376,6 @@ export function attachAudit(m, { invariants = true, limit = 200 } = {}) {
         overdue(ps, 'into combat');
         if (!ps.ready) fail(`${id}: not ready at combat start`);
         if (ps.funds !== 0 && !carries(ps)) fail(`${id}: kept ${ps.funds} funds into combat`);
-        if (ps.offers.length) fail(`${id}: reward offer survived the prep`);
         for (const s of ps.shop.slots) if (s && (!s.frozen || s.sold)) fail(`${id}: unfrozen/sold slot ${s.id} survived into combat`);
       }
     });
@@ -411,8 +424,8 @@ export function attachAudit(m, { invariants = true, limit = 200 } = {}) {
       for (const [ps, lp0] of before) {
         const r = m.lastResults.get(ps.playerId) || { leaked: [] };
         const counted = (r.leaked || []).filter((l) => l && l.counted !== false).length;
-        // after 联防 a leaker pays for every surviving enemy of its source — enemies spawned by its leaked enemies
-        // (splitters, summoners) included — so only the cap bounds it; everybody else never exceeds own leaks
+        // after 联防 a leaker pays for every surviving enemy of its source — the enemies the field itself spawned while it
+        // ran (splitters, summoners: `uniteRuntime`) are not billable — so only the cap bounds it; everybody else never exceeds own leaks
         const max = uniteRan && plan.leakers.includes(ps) ? cap : Math.min(cap, counted);
         if (ps.alive) {
           const loss = lp0 - ps.lp;
@@ -434,15 +447,23 @@ export function attachAudit(m, { invariants = true, limit = 200 } = {}) {
   });
   wrap(m, 'startFinalAssault', function (orig, hidden) {
     const alive = m.alivePlayers();
+    const before = m.bossPairs?.map(g => g.slice()) ?? null;
     const lpSum = alive.reduce((s, p) => s + Math.max(0, p.lp), 0);
     const teamLp0 = m.teamLp;
     const res = orig(hidden);
     runInvariants();
     check('final assault', () => {
       if (!alive.length) return;
-      const groups = pairPlayers(alive).map((g) => g.map((p) => p.playerId).join(','));
+      const pairs = m.bossPairs || [];
+      const memberIds = pairs.flat();
+      if (pairs.length !== Math.ceil(alive.length / 2) || pairs.some(g => g.length < 1 || g.length > 2)
+        || new Set(memberIds).size !== memberIds.length
+        || JSON.stringify([...memberIds].sort()) !== JSON.stringify(alive.map(p => p.playerId).sort())) fail('boss pairing does not cover every alive player once');
+      if (before && before.flat().every(id => alive.some(p => p.playerId === id)) && before.flat().length === alive.length
+        && JSON.stringify(before) !== JSON.stringify(pairs)) fail('boss pairing changed after preparation');
+      const groups = pairs.map(g => g.join(','));
       const fields = m.fields.map((f) => f.players.join(','));
-      if (JSON.stringify(groups) !== JSON.stringify(fields)) fail(`boss fields ${fields.join(' | ')} != seat pairs ${groups.join(' | ')}`);
+      if (JSON.stringify(groups) !== JSON.stringify(fields)) fail(`boss fields ${fields.join(' | ')} != saved pairs ${groups.join(' | ')}`);
       m.fields.forEach((f, i) => { if (f.fieldId !== `b${i + 1}`) fail(`boss field id ${f.fieldId}`); });
       if (!hidden && m.teamLp !== lpSum) fail(`team LP ${m.teamLp} != Σ alive LP ${lpSum}`);
       if (hidden && m.teamLp !== teamLp0) fail(`hidden core changed team LP ${teamLp0} → ${m.teamLp}`);
@@ -483,7 +504,7 @@ export function attachAudit(m, { invariants = true, limit = 200 } = {}) {
 /** Content that may pay out or refund around a purchase (then exact price checks are skipped). */
 function hasSpendEffects(m, ps) {
   const reg = m.registry;
-  const keys = ['onBuy', 'onSpend', 'onSold', 'onRefresh', 'onLevelUp', 'onGain', 'onLayers'];
+  const keys = ['onBuy', 'onSpend', 'onSold', 'onRefresh', 'onLevelUp', 'onGain', 'onLayers', 'onActiveBonds'];
   const any = (h) => h && keys.some((k) => typeof h[k] === 'function');
   if (reg.globals().some(([, h]) => any(h))) return true;
   if (ps.bandId && any(reg.get(`band:${ps.bandId}`))) return true;

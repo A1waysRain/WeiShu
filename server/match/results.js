@@ -14,7 +14,6 @@
 
 import { bondList } from './bondsMeta.js';
 import { boardOrder } from './board.js';
-import { randomUUID } from 'node:crypto';
 
 const STAT_OF = {
   bossDamage: (ps) => ps.stats.bossDamage,
@@ -96,9 +95,17 @@ export function buildResult(m, outcome) {
   const teamRounds = victory ? gd.bossRound + (hiddenCleared ? 1 : 0) : Math.max(0, Math.min(m.round, gd.bossRound) - 1);
   const rows = players.map((ps) => {
     const roundsPassed = !ps.alive && ps.eliminatedRound != null ? Math.max(0, ps.eliminatedRound - 1) : teamRounds;
-    const lineup = boardOrder(ps.board).filter((x) => x.piece.kind === 'chess').map(({ r, c, piece }) => ({
-      id: piece.id, golden: gd.isGolden(piece.id), tier: gd.tierOf(piece.id), row: r, col: c, items: (piece.items || []).map((i) => i.id),
-    }));
+    const lineup = boardOrder(ps.board).filter((x) => x.piece.kind === 'chess').map(({ r, c, piece }) => {
+      const e = { id: piece.id, golden: gd.isGolden(piece.id), tier: gd.tierOf(piece.id), row: r, col: c, items: (piece.items || []).map((i) => i.id) };
+      // 0.2.0 自选编队: a DIY slot's pick — the result screen names and draws the operator (shared/diy.js diyRecord)
+      const pick = typeof ps.diyPickOf === 'function' ? ps.diyPickOf(piece.id) : null;
+      if (pick) e.diy = { charId: pick.charId, skillIndex: pick.skillIndex, uniEquipId: pick.uniEquipId };
+      // 0.2.0 补位: a chess this player fielded as its stand-in — the result screen draws the stand-in (the owner's recall
+      // of the official mode, 2026-10-06); `standInFor` = the replaced operator's charId, like the sim's UnitInfo
+      const si = typeof ps.fieldsStandIn === 'function' && ps.fieldsStandIn(piece.id) ? gd.standIn(piece.id) : null;
+      if (si && si.standInFor) e.standInFor = si.standInFor;
+      return e;
+    });
     // the team's clear counts for the players still in; an eliminated / departed teammate did not pass the boss round
     const cleared = victory && ps.alive;
     return {
@@ -110,6 +117,7 @@ export function buildResult(m, outcome) {
       alive: ps.alive,
       victory: cleared,
       roundsPassed,
+      creditedKills: ps.creditedKills,
       eliminatedRound: ps.eliminatedRound,
       lp: Math.max(0, ps.lp),
       bandId: ps.bandId,
@@ -121,14 +129,13 @@ export function buildResult(m, outcome) {
         bossDamage: Math.round(ps.stats.bossDamage), activatedLayers: ps.activatedLayers(), lpLost: ps.stats.lpLost,
         perfectRounds: ps.stats.perfectRounds,
       },
-      title: titles.get(ps.playerId) ?? null,
-      trophies: trophiesFor(gd, roundsPassed, cleared && hiddenCleared),
-      reward: rewardFor(gd, roundsPassed),
+      title: m.test === true ? null : titles.get(ps.playerId) ?? null,
+      trophies: m.test === true ? 0 : trophiesFor(gd, roundsPassed, cleared && hiddenCleared),
+      reward: m.test === true ? 0 : rewardFor(gd, roundsPassed),
     };
   });
-  return {
+  const out = {
     t: 'm.result',
-    resultId: m.historyResultId ?? (m.historyResultId = randomUUID()),
     victory,
     roundsPassed: teamRounds,
     hiddenReached,
@@ -145,4 +152,12 @@ export function buildResult(m, outcome) {
     durationMs: Math.max(0, m.sched.now() - m.startedAt),
     players: rows,
   };
+  // A test match is marked on the settlement the replay stores. The keys are absent otherwise, so a normal
+  // result stays byte-identical. Test results award nothing and are never persisted by the client.
+  if (m.test === true) {
+    out.test = true;
+    out.testActions = m.testActions | 0;
+    if (m.testReplayable === false) out.testReplayable = false;
+  }
+  return out;
 }

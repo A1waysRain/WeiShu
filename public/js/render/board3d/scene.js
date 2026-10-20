@@ -4,28 +4,36 @@
 //
 //   const board = new BoardScene(THREE, pack, { canvas, quality })   (pack = load.js loadBoardPack)
 //   board.setStage(stage)            geometry from the stage grid (layout.js) + devices + gates + terrain
+//   board.setScenePack(id, pack)     the official scene of stage `id` (load.js loadScenePack): drawn instead of the
+//                                    procedural tiles and background while that stage is set (null → procedural)
 //   board.setArea(rects)             the built areas (layout.js AREAS / areaFor: normal field + pen, 联防, boss)
 //   board.setFocus(rect)             the lit field (others fade, animated)
 //   board.setBattleRect(rect|null)   crates / turrets inside a running battle are sim units: static ones hide
-//   board.createDevice()             → handle { update(cam, { x, y, z, size, height, top, side, alpha, rot }), mesh: null, destroy() }
+//   board.createDevice(spec)         → handle { update(cam, { x, y, z, size, height, top, side, alpha, rot }), mesh: null, destroy() }
 //                                      (render/units.js DeviceView boxes, drawn as the official crate mesh)
 //   board.flashObjective(r, c)       leak flash of a blue objective box
 //   board.render(cam, timeSec)       sync the camera, animate, draw
 //   board.resize(w, h, dpr) · board.stats() · board.destroy()
 //
 // Draw calls: board (tiles + blocks + platforms, merged, MT_autochess), the pen's glass hatches (glassMaterial),
-// static crates (merged, same material),
+// static crates and 射击台 as official models (trap_1105_accrate / trap_1106_achplat, merged, trapMaterial —
+// the atlas box / layout.js slab stay the fallbacks without the local art),
 // decals (MT_autochess_common), fence pipes, blowers (merged, unlit), gate boxes (additive + alpha, merged per
 // material), cyan field edges, terrain overlays (≤ 4), background plane + its shadow catcher — ~12–16 in total.
+// An official scene replaces the tiles, glass, decals, pipes and background (all but the device slabs, layout.js
+// buckets.raised — GitHub #569) with one mesh per material and lightmap
+// page of the parts the built areas show (load.js mergeSceneChunks). Devices, gates, edges and terrain stay.
 // The key light's shadow map is rendered only when the geometry changes (autoUpdate off).
 
 import { buildBoard, objToBoard, boxProjectUV, ROWS, COLS, DEVICE_H, AREAS } from './layout.js';
 import { surfaceUV } from './atlas.js';
 import {
   focusUniforms, makeTexture, boardMaterial, glassMaterial, decalMaterial, pipeMaterial, unlitMaterial, gateMaterial, glowMaterial,
-  waterMaterial, mireMaterial, infectionMaterial, smogMaterial, dashTexture, environmentMap,
+  waterMaterial, mireMaterial, infectionMaterial, smogMaterial, dashTexture, environmentMap, sceneMaterial, sceneWaterDecalMaterial,
+  sceneEnvTexture, applyWaterMaterial, trapMaterial,
 } from './materials.js';
 import { syncThreeCamera } from '../projection.js';
+import { mergeSceneChunks, sceneMaterialKey, sceneWaterInfo, isSceneWater } from './load.js';
 
 /** Lighting rig (tuned against the official screenshots: bright even tops, darker sides, soft shadows). */
 export const LIGHTING = Object.freeze({
@@ -44,13 +52,39 @@ export const LIGHTING = Object.freeze({
   bg: { z: -8, size: 43.16, color: 0.713, dim: 0.8, tiles: 3 },
 });
 
-/** Additive gain of the gate boxes at the curve's mean (tuned against the official screenshots). */
-export const GATE_GAIN = 0.6;
+/**
+ * The gate boxes' _TintColor, from the client's 2 s clip (arts/effects/[pack]map.ab, controller `starting`,
+ * `UVAnimation`): one renderer red (1, 0, 0) with alpha 0.134 → 0.229 → 0.134, the other blue (0, 0.0897, 1) with alpha
+ * 0.16 → 0.097 → 0.16. The alpha-blended part has the material's own (1, 1, 1, 1).
+ * [ASSUMED] the clip's renderer paths are hashes that match no name in the bundle: red is read as the start gate,
+ * blue as the objective.
+ */
+export const GATE_TINT = Object.freeze({
+  start: { rgb: [1, 0, 0], alpha: [0.134, 0.229] },
+  end: { rgb: [0, 0.0897, 1], alpha: [0.16, 0.097] },
+  endAb: { rgb: [1, 1, 1], alpha: [1, 1] },
+});
 
-/** Gate pulse: the official clip's _TintColor.a curve (2 s loop, 0.134 → 0.229 → 0.134) scaled to our intensity. */
-export function gatePulse(t, phase = 0) {
-  const k = 0.5 - 0.5 * Math.cos(((t / 2 + phase) % 1) * Math.PI * 2);
-  return 0.134 + (0.229 - 0.134) * k;
+/**
+ * Gate pulse: a _TintColor.a curve [at 0 s and 2 s, at 1 s] of the 2 s loop. The clip's streamed keys are cubic
+ * segments a·x³ + b·x² + c·x + d with flat ends (red: −0.19, 0.285, 0, 0.134 on 0–1 s, then the mirror), i.e. a
+ * smoothstep between the two values.
+ */
+export function gatePulse(t, [from, mid] = GATE_TINT.start.alpha) {
+  const u = ((t % 2) + 2) % 2;
+  const x = u < 1 ? u : 2 - u;
+  return from + (mid - from) * x * x * (3 - 2 * x);
+}
+
+/**
+ * Is a named part of an official scene (its ground rect [x0, y0, x1, y1]) shown with the built `areas`? The official
+ * scene keeps each field as a sub-graphic it switches on (HIDDEN@n: the left / right normal field, the boss field);
+ * a part is shown when its centre lies in one of the areas.
+ */
+export function sceneGroupVisible(rect, areas) {
+  if (!Array.isArray(rect) || rect.length < 4) return true;
+  const cx = (rect[0] + rect[2]) / 2, cy = (rect[1] + rect[3]) / 2;
+  return (areas || []).some((a) => cx >= a.c0 - 0.5 && cx <= a.c1 + 0.5 && cy >= a.r0 - 0.5 && cy <= a.r1 + 0.5);
 }
 
 const areaKey = (list) => (list || []).map((a) => `${a.r0},${a.r1},${a.c0},${a.c1}`).sort().join(';');
@@ -135,15 +169,18 @@ export class BoardScene {
     this.scene.fog = new T.Fog(LIGHTING.fog.color, LIGHTING.fog.near, LIGHTING.fog.far);
     this.camera = new T.PerspectiveCamera(40, 16 / 9, 0.5, 120);
     this.focus = focusUniforms(T);
+    this.envMap = null;
+    this.envRT = null;
     if (opts.environment !== false) {
       try {
         this.envMap = environmentMap(T, R);
+        this.envRT = this.envMap?.userData?.pmremTarget || null;
         if (this.envMap) {
           this.scene.environment = this.envMap;
           this.scene.environmentIntensity = LIGHTING.env;
           this.scene.environmentRotation?.set?.(-Math.PI / 2, 0, 0);
         }
-      } catch { this.envMap = null; }
+      } catch { this.envMap = null; this.envRT = null; }
     }
     this.focusTarget = null;
     const aniso = Math.min(8, R.capabilities?.getMaxAnisotropy?.() || 1);
@@ -151,9 +188,11 @@ export class BoardScene {
     this.tex = {
       D: makeTexture(T, img.D, { aniso }), N: makeTexture(T, img.N, { srgb: false, aniso }), R: makeTexture(T, img.R, { srgb: false, aniso }),
       E: makeTexture(T, img.E, { aniso }), common: makeTexture(T, img.common, { aniso }), commonE: makeTexture(T, img.commonE, { aniso }),
-      BG: makeTexture(T, img.BG, { aniso }), wind: makeTexture(T, img.wind, { aniso }), gate: makeTexture(T, img.gate, {}),
+      BG: makeTexture(T, img.BG, { aniso }), wind: makeTexture(T, img.wind, { aniso }), gate: makeTexture(T, img.gate, { srgb: false }),
       waterN: makeTexture(T, img.waterN, { srgb: false, repeat: true }), caustics: makeTexture(T, img.caustics, { srgb: false, repeat: true }),
       noise: makeTexture(T, img.noise, { srgb: false, repeat: true }),
+      platform: makeTexture(T, img.platform, { aniso }),
+      crate: makeTexture(T, img.crate, { aniso }),
     };
     if (this.tex.BG) { this.tex.BG.wrapS = T.MirroredRepeatWrapping; this.tex.BG.wrapT = T.MirroredRepeatWrapping; }
     this.mat = {
@@ -163,17 +202,19 @@ export class BoardScene {
       pipe: pipeMaterial(T, this.focus),
       bg: this.tex.BG ? unlitMaterial(T, this.tex.BG, new T.Color().setScalar(LIGHTING.bg.color * LIGHTING.bg.dim)) : new T.MeshBasicMaterial({ color: 0x1a1d1f }),
       wind: this.tex.wind ? unlitMaterial(T, this.tex.wind) : null,
-      gateStartAdd: this.tex.gate ? gateMaterial(T, this.tex.gate, { additive: true }) : null,
-      gateEndAdd: this.tex.gate ? gateMaterial(T, this.tex.gate, { additive: true }) : null,
-      gateEndAb: this.tex.gate ? gateMaterial(T, this.tex.gate, { additive: false }) : null,
+      gateStartAdd: this.tex.gate ? gateMaterial(T, this.tex.gate, { additive: true, tint: GATE_TINT.start.rgb }) : null,
+      gateEndAdd: this.tex.gate ? gateMaterial(T, this.tex.gate, { additive: true, tint: GATE_TINT.end.rgb }) : null,
+      gateEndAb: this.tex.gate ? gateMaterial(T, this.tex.gate, { additive: false, tint: GATE_TINT.endAb.rgb }) : null,
       edge: glowMaterial(T, dashTexture(T)),
       water: waterMaterial(T, this.tex, this.focus),
       mire: mireMaterial(T, this.tex, this.focus),
       infection: infectionMaterial(T, this.tex, this.focus),
       smog: smogMaterial(T, this.tex, this.focus),
       shadowCatcher: new T.ShadowMaterial({ opacity: 0.32, color: 0x000000 }),
+      platform: this.tex.platform ? trapMaterial(T, this.tex.platform, this.focus, pack?.materials?.trap?.MT_trap_1106_achplat || null, LIGHTING.key.dir) : null,
+      crate: this.tex.crate ? trapMaterial(T, this.tex.crate, this.focus, pack?.materials?.trap?.MT_trap_1105_accrate
+        || { floats: { _Ambient: 0.809, _Diffuse: 0.271 } }, LIGHTING.key.dir) : null,
     };
-    this.mat.crateFade = null;
     // lights
     const hemi = new T.HemisphereLight(LIGHTING.hemi.sky, LIGHTING.hemi.ground, LIGHTING.hemi.intensity);
     hemi.position.set(0, 0, 1);
@@ -194,6 +235,10 @@ export class BoardScene {
     this.scene.add(this.root, this.dynamic);
     this.stageKey = null;
     this.stage = null;
+    this.scenePacks = new Map();   // stage id → official scene pack (setScenePack)
+    this.sceneRes = new Map();     // pack key → { tex, lm, mats } GPU resources (kept across rebuilds)
+    this.official = null;
+    this.sceneWater = [];
     this.area = AREAS.normal;
     this.areaKey = areaKey(AREAS.normal);
     this.battleRect = null;
@@ -205,7 +250,9 @@ export class BoardScene {
     this.camRef = null;
     this.frames = 0;
     this.lastMs = 0;
-    this._crateGeom = null;
+    this._crateGeom = undefined;
+    this._boxGeom = null;
+    this._platformGeom = undefined;
   }
 
   // ---- geometry ----------------------------------------------------------------------------------------------
@@ -240,17 +287,52 @@ export class BoardScene {
     this.meshes = {};
   }
 
-  /** The crate mesh in board space (s_common_box_01 when loaded, else a unit chamfer-free box), UVs on D. */
-  crateGeometry() {
-    if (this._crateGeom) return this._crateGeom;
+  /** The old atlas box: kept for mounds and missing-art installs (including the procedural-box fallback). */
+  boxGeometry() {
+    if (this._boxGeom) return this._boxGeom;
     const uv = this.pack?.uv || {};
-    const obj = this.pack?.meshes?.crate;
+    const obj = this.pack?.meshes?.box;
     let base;
     if (obj && obj.normal) base = objToBoard(obj, 0.01);
     else base = boxData(0.9, 0.675);
-    this._crateGeom = boxProjectUV(base, uv.crateTop || { src: 'D', rect: [1222, 1938, 134, 108] }, uv.crateSide || { src: 'D', rect: [1087, 1938, 134, 108] });
-    this._crateGeom.color = null;
+    this._boxGeom = boxProjectUV(base, uv.crateTop || { src: 'D', rect: [1222, 1938, 134, 108] }, uv.crateSide || { src: 'D', rect: [1087, 1938, 134, 108] });
+    this._boxGeom.color = null;
+    return this._boxGeom;
+  }
+
+  /**
+   * 阻隔工事: battle prefab Graphic/Mesh/trap_1105_accrate has identity parents, X rotation −90°, scale 0.01.
+   * Undo OBJ's mirrored X, apply that rotation, then battle −z → board height: (−x, z, y) × 0.01 = objToBoard.
+   * Keep the authored UVs and pivot (base ~0.002, top ~0.838, footprint ~1.013 × 1.019 tiles), no recentering.
+   */
+  clientCrateGeometry() {
+    if (this._crateGeom !== undefined) return this._crateGeom;
+    const obj = this.pack?.meshes?.crate;
+    this._crateGeom = obj?.normal && obj?.uv && this.mat.crate ? objToBoard(obj, 0.01) : null;
     return this._crateGeom;
+  }
+
+  crateGeometry() { return this.clientCrateGeometry() || this.boxGeometry(); }
+
+  /** DeviceView's dimensions follow the active model; 2D and missing-art boxes keep their old spec. */
+  deviceSpec(spec) {
+    if (spec?.top !== 'crateTop' || !this.clientCrateGeometry()) return spec;
+    if (!this._crateSpec) {
+      const { min, max } = this.pack.meshes.crate.bounds;
+      this._crateSpec = { ...spec, size: (max[0] - min[0]) * 0.01, height: max[1] * 0.01 };
+    }
+    return this._crateSpec;
+  }
+
+  /**
+   * The official 射击台 model in board space (trap_1106_achplat at its prefab scale 0.01: 1.05 tiles square, 0.465
+   * high — render/style.js TILE_H.platform is its top), or null without the local art (layout.js draws the slab).
+   */
+  platformGeometry() {
+    if (this._platformGeom !== undefined) return this._platformGeom;
+    const obj = this.pack?.meshes?.platform;
+    this._platformGeom = obj && obj.normal && obj.uv && this.mat.platform ? objToBoard(obj, 0.01) : null;
+    return this._platformGeom;
   }
 
   /** Built areas (inclusive tile rects): rebuilds when they change. */
@@ -267,41 +349,158 @@ export class BoardScene {
   /** Rebuild everything for a stage (no-op when the same stage object/grid is set again). */
   setStage(stage) {
     if (this.destroyed) return;
-    const key = stage ? `${stage.id || ''}|${(stage.rows || []).join('/')}|${JSON.stringify((stage.devices || []).map((d) => [d.key, d.pos, d.active, d.dir]))}` : '';
+    const official = stage ? this.scenePacks.get(stage.id) || null : null;
+    const key = stage ? `${stage.id || ''}|${official ? official.key : ''}|${(stage.rows || []).join('/')}|${JSON.stringify((stage.devices || []).map((d) => [d.key, d.pos, d.active, d.dir]))}` : '';
     if (key === this.stageKey) return;
     this.stageKey = key;
     this.stage = stage || null;
     this._clear();
-    if (!stage) return;
-    const board = buildBoard(stage, { uv: this.pack?.uv || null, area: this.area });
+    this.sceneWater = [];
+    this.official = null;
+    if (!stage) { applyWaterMaterial(this.mat.water, null); return; }
+    const board = buildBoard(stage, { uv: this.pack?.uv || null, area: this.area, platformMesh: !!this.platformGeometry() });
     this.board = board;
     const M = this.meshes = {};
-    M.board = this._mesh(board.buckets.board, this.mat.board);
-    M.glass = this._mesh(board.buckets.glass, this.mat.glass);
-    M.decal = this._mesh(board.buckets.decal, this.mat.decal, { cast: false });
-    M.pipe = this._mesh(board.buckets.pipe, this.mat.pipe);
+    this.official = official && this._buildScene(official) ? official : null;
+    // Apply only the active, successfully built pack: preloading another stage must not recolour this board.
+    // setScenePack rebuilds the current stage, so replacement/removal also restores parameters and cube defines.
+    const waterPack = this.official;
+    applyWaterMaterial(this.mat.water, sceneWaterInfo(waterPack?.doc), waterPack ? {
+      env: this._sceneResources(waterPack).env, envRange: waterPack.doc?.env?.range, envMips: waterPack.doc?.env?.mips,
+    } : {});
+    if (!this.official) {
+      M.board = this._mesh(board.buckets.board, this.mat.board);
+      M.glass = this._mesh(board.buckets.glass, this.mat.glass);
+      M.decal = this._mesh(board.buckets.decal, this.mat.decal, { cast: false });
+      M.pipe = this._mesh(board.buckets.pipe, this.mat.pipe);
+    } else {
+      // the scene has no device slabs: the 特制水上平台 / 封印的地面 slabs (and the 射击台's without its model) stay
+      // drawn on it (units stand on them at tiles.js heightAt; GitHub #569)
+      M.raised = this._mesh(board.buckets.raised, this.mat.board);
+      M.raisedDecal = this._mesh(board.buckets.raisedDecal, this.mat.decal, { cast: false });
+    }
     this._buildDevices(board);
     this._buildGates(board);
     this._buildEdges(board);
     this._buildTerrain(board);
-    this._buildBackground(board);
+    if (!this.official) this._buildBackground(board);
     this._fitShadow(board);
     this.renderer.shadowMap.needsUpdate = true;
   }
 
+  /** Use (or drop, with null) the official scene of stage `id`; rebuilds when that stage is the current one. */
+  setScenePack(id, pack) {
+    if (this.destroyed || typeof id !== 'string' || !id) return false;
+    const prev = this.scenePacks.get(id) || null;
+    if (prev === (pack || null)) return false;
+    if (prev) this._disposeScene(prev);
+    if (pack) this.scenePacks.set(id, pack); else this.scenePacks.delete(id);
+    if (this.stage && this.stage.id === id) { this.stageKey = null; this.setStage(this.stage); }
+    return true;
+  }
+
+  /** Textures and materials of a scene pack (created once per pack, kept across rebuilds). */
+  _sceneResources(pack) {
+    let res = this.sceneRes.get(pack.key);
+    if (res) return res;
+    const T = this.THREE;
+    const aniso = Math.min(8, this.renderer.capabilities?.getMaxAnisotropy?.() || 1);
+    const tex = {}, data = {}, lm = [];
+    for (const [name, img] of Object.entries(pack.images?.tex || {})) tex[name] = makeTexture(T, img, { aniso, repeat: true });
+    for (const [name, img] of Object.entries(pack.images?.data || {})) data[name] = makeTexture(T, img, { srgb: false, aniso, repeat: true });
+    for (const img of pack.images?.lm || []) lm.push(img ? makeTexture(T, img, { srgb: false }) : null);
+    res = { tex, data, lm, env: sceneEnvTexture(T, pack.images?.env, pack.doc?.env), mats: new Map() };
+    this.sceneRes.set(pack.key, res);
+    return res;
+  }
+
+  _disposeScene(pack) {
+    const res = this.sceneRes.get(pack.key);
+    if (!res) return;
+    for (const m of res.mats.values()) m.dispose();
+    for (const t of [...Object.values(res.tex), ...Object.values(res.data), ...res.lm, res.env]) t?.dispose?.();
+    this.sceneRes.delete(pack.key);
+  }
+
+  /**
+   * The official scene's meshes: the base plus the fields of the built areas, one mesh per material and lightmap
+   * page (`mergeSceneChunks`). A switched-off HIDDEN part is left out before the merge.
+   */
+  _buildScene(pack) {
+    const T = this.THREE;
+    const res = this._sceneResources(pack);
+    const infos = pack.doc?.materials || {};
+    this.sceneWater = [];
+    const buckets = new Map();
+    for (const c of pack.chunks || []) {
+      if (c.group && !sceneGroupVisible(pack.groups?.[c.group], this.area)) continue;
+      const info = infos[c.material] || null;
+      const mk = sceneMaterialKey(c, info);
+      let bucket = buckets.get(mk);
+      if (!bucket) { bucket = { info, chunks: [] }; buckets.set(mk, bucket); }
+      bucket.chunks.push(c);
+    }
+    let n = 0;
+    for (const [mk, bucket] of buckets) {
+      const c = mergeSceneChunks(bucket.chunks);
+      const info = bucket.info;
+      const surface = isSceneWater(info, c.material);
+      const water = surface || info?.kind === 'water';
+      let mat = res.mats.get(mk);
+      if (!mat) {
+        mat = surface
+          ? waterMaterial(T, this.tex, this.focus, info, { env: res.env, envRange: pack.doc?.env?.range, envMips: pack.doc?.env?.mips })
+          : water ? sceneWaterDecalMaterial(T, this.tex, this.focus, info)
+          : sceneMaterial(T, {
+            map: res.tex[info?.map] || null, lightMap: c.lightmap >= 0 ? (res.lm[c.lightmap] || null) : null, info,
+            light: pack.doc?.light || null, lightRange: pack.doc?.lightRange, lightEncoding: pack.doc?.lightEncoding,
+            normalMap: res.data[info?.normalMap] || null, glossMap: res.data[info?.glossMap] || null,
+            // sRGB. sceneMaterial samples it only when _EMISSION is on, so a map without the keyword stays unlit.
+            emissionMap: res.tex[info?.emissionMap] || null,
+            env: res.env, envRange: pack.doc?.env?.range,
+          }, this.focus);
+        res.mats.set(mk, mat);
+      }
+      if (water) this.sceneWater.push(mat);
+      const g = new T.BufferGeometry();
+      g.setAttribute('position', new T.BufferAttribute(c.position, 3));
+      g.setAttribute('normal', new T.BufferAttribute(c.normal, 4, true));
+      g.setAttribute('uv', new T.BufferAttribute(c.uv, 2));
+      g.setAttribute('aLm', new T.BufferAttribute(c.uv1, 2));
+      g.setAttribute('aColor', new T.BufferAttribute(c.color, 4, true));
+      g.setIndex(new T.BufferAttribute(c.index, 1));
+      g.computeBoundingSphere();
+      const mesh = new T.Mesh(g, mat);
+      mesh.castShadow = false; mesh.receiveShadow = false;
+      mesh.renderOrder = water ? 1 : mat.userData.blend === 'blend' ? 2 : mat.userData.blend === 'cutout' ? -3 : -4;
+      mesh.matrixAutoUpdate = false; mesh.updateMatrix();
+      this.root.add(mesh);
+      this.meshes[`scene${n++}`] = mesh;
+    }
+    return n > 0;
+  }
+
   _buildDevices(board) {
-    const crates = [], blowers = [];
+    const crates = [], blowers = [], platforms = [];
     this.staticCrates = [];
     const wind = this.pack?.meshes?.blower ? objToBoard(this.pack.meshes.blower, 1) : null;
+    const plat = this.platformGeometry();
+    for (const mat of [this.mat.platform, this.mat.crate]) if (mat) {
+      // lit by the official scene's own key light when one is drawn, else by the procedural board's
+      const dir = this.official?.doc?.light?.dir;
+      mat.uniforms.uLightDir.value.set(...(Array.isArray(dir) && dir.length === 3 ? dir : LIGHTING.key.dir)).normalize();
+    }
     for (const d of board.devices) {
       if (d.kind === 'crate') this.staticCrates.push(d);
+      else if (d.kind === 'platform' && plat) platforms.push(placeMesh(plat, { x: d.c, y: d.r, z: d.z0 }));
       else if (d.kind === 'blower' && wind && this.mat.wind) blowers.push(placeMesh(wind, { x: d.c, y: d.r, z: d.z0 + 0.078, rot: DIR_TURNS[d.dir] ?? 0 }));
       else if (d.kind === 'blower' || d.kind === 'turret') crates.push(placeMesh(boxWithTop(this.pack?.uv, d.kind), { x: d.c, y: d.r, z: d.z0 }));
-      else if (d.kind === 'mound') crates.push(placeMesh(this.crateGeometry(), { x: d.c, y: d.r, z: d.z0, s: 0.95, sz: 0.55 }));
+      else if (d.kind === 'mound') crates.push(placeMesh(this.boxGeometry(), { x: d.c, y: d.r, z: d.z0, s: 0.95, sz: 0.55 }));
       else if (d.kind === 'bush') crates.push(placeMesh(bushData(), { x: d.c, y: d.r, z: d.z0 }));
     }
     if (blowers.length) this.meshes.blowers = this._mesh(mergeInto(blowers), this.mat.wind, { receive: false });
     if (crates.length) this.meshes.props = this._mesh(mergeInto(crates), this.mat.board);
+    if (platforms.length) this.meshes.platforms = this._mesh(mergeInto(platforms), this.mat.platform);
     this._rebuildCrates();
   }
 
@@ -310,7 +509,7 @@ export class BoardScene {
     const R = this.battleRect;
     const inside = (d) => !!R && d.r >= R.r0 && d.r <= R.r1 && d.c >= R.c0 && d.c <= R.c1;
     const list = (this.staticCrates || []).filter((d) => !inside(d)).map((d) => placeMesh(this.crateGeometry(), { x: d.c, y: d.r, z: d.z0 }));
-    if (list.length) this.meshes.crates = this._mesh(mergeInto(list), this.mat.board);
+    if (list.length) this.meshes.crates = this._mesh(mergeInto(list), this.clientCrateGeometry() ? this.mat.crate : this.mat.board);
     this.renderer.shadowMap.needsUpdate = true;
   }
 
@@ -388,7 +587,9 @@ export class BoardScene {
     const opt = { cast: false, receive: false, order: 2 };
     if (T.water.length) this.meshes.water = this._mesh(quads(T.water, -0.035), this.mat.water, opt);
     if (T.mire.length) this.meshes.mire = this._mesh(quads(T.mire, 0.006, 0.02), this.mat.mire, opt);
-    if (T.infection.length) this.meshes.infection = this._mesh(quads(T.infection, 0.007, 0.02), this.mat.infection, opt);
+    // The infection (活性源石) glow is our own flat patch; an official scene already carries that floor in its own
+    // geometry and textures, so drawing ours on top just overlaps it (#549).
+    if (T.infection.length && !this.official) this.meshes.infection = this._mesh(quads(T.infection, 0.007, 0.02), this.mat.infection, opt);
     if (T.smog.length) {
       // two crossed haze cards per grille tile, standing up
       const pos = [], uv = [], idx = [];
@@ -430,8 +631,13 @@ export class BoardScene {
 
   _fitShadow(board) {
     const k = this.key;
-    const b = board.bounds;
-    const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
+    const b = (board && board.bounds) || {};
+    // [ASSUMED] an empty or non-finite board box (no tiles yet) centres the shadow camera at the origin
+    // with a 30-tile span. A finite box keeps the previous centre and span.
+    const finite = [b.x0, b.x1, b.y0, b.y1].every((v) => Number.isFinite(v));
+    const cx = finite ? (b.x0 + b.x1) / 2 : 0;
+    const cy = finite ? (b.y0 + b.y1) / 2 : 0;
+    const span = finite ? Math.max(b.x1 - b.x0, b.y1 - b.y0) : 30;
     const d = LIGHTING.key.dir;
     const len = Math.hypot(d[0], d[1], d[2]);
     const dist = 30;
@@ -440,7 +646,7 @@ export class BoardScene {
     k.target.updateMatrixWorld();
     const cam = k.shadow.camera;
     // light-space box covering the island and its shadow on the background plane
-    const half = Math.max(b.x1 - b.x0, b.y1 - b.y0) / 2 + 9;
+    const half = span / 2 + 9;
     cam.left = -half; cam.right = half; cam.top = half; cam.bottom = -half;
     cam.near = 1; cam.far = dist + 30;
     cam.updateProjectionMatrix();
@@ -450,20 +656,24 @@ export class BoardScene {
   // ---- dynamic devices (battle) ------------------------------------------------------------------------------
 
   /** A crate / device box driven by render/units.js DeviceView (see header). */
-  createDevice() {
+  createDevice(spec = { top: 'crateTop' }) {
     const T = this.THREE;
     const self = this;
-    const geom = this._geometry({ ...this.crateGeometry(), color: null });
-    const mat = this.mat.board.clone();
+    const clientCrate = spec.top === 'crateTop' && this.clientCrateGeometry();
+    const geom = this._geometry({ ...(clientCrate || this.boxGeometry()), color: null });
+    const source = clientCrate ? this.mat.crate : this.mat.board;
+    const mat = source.clone();
     mat.transparent = true;
     mat.vertexColors = false;
-    // keep the focus falloff on the clone
-    mat.onBeforeCompile = this.mat.board.onBeforeCompile;
+    // Keep focus and scene light live across stage / camera rebuilds; opacity belongs to this device alone.
+    if (clientCrate) Object.assign(mat.uniforms, this.focus, { uMap: source.uniforms.uMap, uLightDir: source.uniforms.uLightDir });
+    else mat.onBeforeCompile = source.onBeforeCompile;
     const mesh = new T.Mesh(geom, mat);
     mesh.castShadow = true; mesh.receiveShadow = true;
     this.dynamic.add(mesh);
-    const bx = this.crateGeometry().bounds || { x0: -0.45, x1: 0.45, z0: 0, z1: 0.675 };
-    const baseSize = Math.max(0.01, bx.x1 - bx.x0), baseH = Math.max(0.01, bx.z1 - bx.z0);
+    geom.computeBoundingBox();
+    const { min, max } = geom.boundingBox;
+    const baseSize = Math.max(0.01, max.x - min.x), baseH = Math.max(0.01, clientCrate ? max.z : max.z - min.z);
     let dead = false;
     const h = {
       mesh: null,
@@ -476,6 +686,7 @@ export class BoardScene {
         const s = (b.size || baseSize) / baseSize;
         mesh.scale.set(s, s, Math.max(0.001, (b.height ?? baseH) / baseH));
         mat.opacity = Math.max(0, Math.min(1, b.alpha ?? 1));
+        if (clientCrate) mat.uniforms.uOpacity.value = mat.opacity;
         mat.depthWrite = mat.opacity > 0.98;
       },
       destroy() {
@@ -541,15 +752,15 @@ export class BoardScene {
       if (Math.abs(F.x - tg[0]) + Math.abs(F.y - tg[1]) + Math.abs(F.z - tg[2]) + Math.abs(F.w - tg[3]) > 40) F.set(tg[0], tg[1], tg[2], tg[3]);
       else F.set(F.x + (tg[0] - F.x) * k, F.y + (tg[1] - F.y) * k, F.z + (tg[2] - F.z) * k, F.w + (tg[3] - F.w) * k);
     }
-    // gate pulses (official 2 s curve → additive intensity), objective leak flashes
-    const pulse = gatePulse(t);
-    if (this.mat.gateStartAdd) this.mat.gateStartAdd.uniforms.uPulse.value = GATE_GAIN * pulse / 0.18;
-    if (this.mat.gateEndAdd) this.mat.gateEndAdd.uniforms.uPulse.value = GATE_GAIN * gatePulse(t, 0.5) / 0.18;
-    if (this.mat.gateEndAb) this.mat.gateEndAb.uniforms.uPulse.value = 0.9;
+    // gate pulses (the official clip's _TintColor.a curves), objective leak flashes
+    if (this.mat.gateStartAdd) this.mat.gateStartAdd.uniforms.uAlpha.value = gatePulse(t, GATE_TINT.start.alpha);
+    if (this.mat.gateEndAdd) this.mat.gateEndAdd.uniforms.uAlpha.value = gatePulse(t, GATE_TINT.end.alpha);
+    if (this.mat.gateEndAb) this.mat.gateEndAb.uniforms.uAlpha.value = gatePulse(t, GATE_TINT.endAb.alpha);
     let flash = 0;
     for (let i = this.flashes.length - 1; i >= 0; i--) { const f = this.flashes[i]; f.t += dt; if (f.t > 1.2) this.flashes.splice(i, 1); else flash = Math.max(flash, 1 - f.t / 1.2); }
     for (const m of [this.mat.gateEndAdd, this.mat.gateEndAb]) if (m) m.uniforms.uFlash.value.setRGB(flash, flash * 0.12, flash * 0.1);
     for (const k of ['water', 'mire', 'infection', 'smog']) this.mat[k].uniforms.uTime.value = t;
+    if (this.official) for (const m of this.sceneWater || []) m.uniforms.uTime.value = t;
     this.renderer.render(this.scene, this.camera);
     this.frames++;
     if (t0) this.lastMs = this.lastMs * 0.9 + ((typeof performance !== 'undefined' ? performance.now() : t0) - t0) * 0.1;
@@ -566,10 +777,20 @@ export class BoardScene {
     this.destroyed = true;
     for (const d of [...this.devices]) d.destroy();
     this._clear();
+    for (const p of [...this.scenePacks.values()]) this._disposeScene(p);
+    this.scenePacks.clear();
     this.mat.edge?.map?.dispose?.(); // canvas dash texture (not in this.tex)
     for (const m of Object.values(this.mat)) m?.dispose?.();
     for (const t of Object.values(this.tex)) t?.dispose?.();
-    this.envMap?.dispose?.();
+    // PMREM's render target owns the environment texture. Disposing the texture alone leaks the framebuffer.
+    // app.js rebuilds 3D by destroy() then a new BoardScene. [ASSUMED] the target's dispose frees the texture too.
+    if (this.envRT) {
+      try { this.envRT.dispose(); } catch { /* ignore */ }
+    } else {
+      this.envMap?.dispose?.();
+    }
+    this.envRT = null;
+    this.envMap = null;
     this.canvas.removeEventListener?.('webglcontextlost', this._onLost);
     try { this.renderer.dispose(); } catch { /* ignore */ }
     try { this.renderer.forceContextLoss?.(); } catch { /* ignore */ }

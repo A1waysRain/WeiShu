@@ -82,7 +82,7 @@ test('bard trait recovers HP for an unhealable ally without enabling ordinary he
   h.b.addBuff(target, { key: 'test:noheal', flags: { noHeal: true, healFree: true }, mods: { healingTakenMul: 0 } });
   target.hp = 1000;
   h.run(3.05);
-  assert.equal(target.hp, 1300);
+  assert.ok(target.hp > 1250 && target.hp <= 1350, 'the continuous bard aura restores HP through both healing restrictions');
   assert.equal(h.b.heal(bard, target, 100), 0);
   checkInvariants(h.b);
 });

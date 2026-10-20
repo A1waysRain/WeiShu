@@ -18,6 +18,7 @@ import { FX_KINDS, fxSpec, tilesAround } from '../../public/js/render/fx.js';
 import { statusIconKey } from '../../public/js/render/style.js';
 import { STATUS_KEYS } from '../../public/js/render/textures.js';
 import { createAssets, localAssetUrl } from '../../public/js/assets.js';
+import { loadBoardArt, resetBoardArt, sourceUrl } from '../../public/js/render/boardArt.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const stages = JSON.parse(readFileSync(path.join(ROOT, 'data/stages.json'), 'utf8'));
@@ -204,6 +205,7 @@ describe('impostor atlas allocator', () => {
     globalThis.PIXI = {
       Container: Obj,
       Sprite: class extends Obj { constructor(t) { super(); this.texture = t; } },
+      Graphics: class extends Obj { beginFill() { return this; } drawRect(x, y, w, h) { this.rect = [x, y, w, h]; return this; } endFill() { return this; } },
       Texture: class { constructor(b, f) { this.baseTexture = b; this.frame = f; } destroy() {} static WHITE = {} },
       Rectangle: class { constructor(x, y, w, h) { Object.assign(this, { x, y, width: w, height: h }); } },
       RenderTexture: { create: (o) => ({ ...o, baseTexture: { id: Math.random() }, framebuffer: { enableStencil() {} }, destroy() {} }) },
@@ -226,7 +228,7 @@ describe('impostor atlas allocator', () => {
       const body = new Obj();
       atlas.park(body);
       atlas.draw(c, body, { a: 0.3, d: 0.3, tx: 40, ty: 90 });
-      assert.equal(body.parent, c.page.bodies);
+      assert.equal(body.parent, c.box, 'drawn inside its slot\'s box (clipped to the slot, GitHub #542)');
       atlas.flush();
       assert.deepEqual(rendered, [true]);
       assert.equal(body.parent, atlas.parked);
@@ -253,6 +255,7 @@ describe('impostor atlas allocator', () => {
     globalThis.PIXI = {
       Container: Obj,
       Sprite: class extends Obj { constructor(t) { super(); this.texture = t; } },
+      Graphics: class extends Obj { beginFill() { return this; } drawRect() { return this; } endFill() { return this; } },
       Texture: class { constructor(b, f) { this.baseTexture = b; this.frame = f; } destroy() {} static WHITE = {} },
       Rectangle: class { constructor(x, y, w, h) { Object.assign(this, { x, y, width: w, height: h }); } },
       RenderTexture: { create: (o) => ({ ...o, baseTexture: {}, framebuffer: { enableStencil() {} }, destroy() {} }) },
@@ -310,5 +313,27 @@ describe('local-art manifest helpers', () => {
     assert.equal(missing.localUrl('map/autochess', 'TX_autochessi_D'), null);
     const broken = createAssets({ manifest: {}, fetch: async () => { throw new Error('offline'); } });
     assert.equal(await broken.local(), null);
+  });
+
+  test('board art loads the crop-table textures at the URLs the manifest lists (one download with the 3D board)', async () => {
+    const at = (n, ext) => `/assets/local/map/autochess/${n}.${ext}`;
+    const m = { groups: { 'map/autochess': { TX_autochessi_D: { path: at('TX_autochessi_D', 'webp') }, TX_autochessi_BG: { path: at('TX_autochessi_BG', 'webp') } } } };
+    const asked = [];
+    const store = { local: async () => m, localUrl: (g, n) => localAssetUrl(m, g, n), image: async (u) => { asked.push(u); return { width: 4 }; } };
+    assert.equal(sourceUrl(store, at('TX_autochessi_D', 'png')), at('TX_autochessi_D', 'webp'));
+    assert.equal(sourceUrl(store, at('TX_autochessi_common_D', 'png')), at('TX_autochessi_common_D', 'png'), 'not in the manifest: the table path');
+    assert.equal(sourceUrl({}, '/x/y.png'), '/x/y.png');
+    const tiles = { version: 2, materials: {}, source: { D: { path: at('TX_autochessi_D', 'png') }, common: { path: at('TX_autochessi_common_D', 'png') }, BG: { path: at('TX_autochessi_BG', 'png') } } };
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (u) => (u === '/assets/local/map/autochess/tiles.json' ? { ok: true, json: async () => tiles } : { ok: false, status: 404 });
+    try {
+      resetBoardArt();
+      const art = await loadBoardArt(store);
+      assert.ok(art?.images.D && art.images.common && art.images.BG);
+      assert.deepEqual(asked.sort(), [at('TX_autochessi_BG', 'webp'), at('TX_autochessi_D', 'webp'), at('TX_autochessi_common_D', 'png')]);
+    } finally {
+      globalThis.fetch = realFetch;
+      resetBoardArt();
+    }
   });
 });

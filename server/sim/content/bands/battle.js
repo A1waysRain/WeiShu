@@ -7,13 +7,18 @@
 //   act1autochess_band2_buff  阿米娅 众志合一   ≥ value_i active bonds (highest i) ⇒ every operator ATK +atk_i,
 //                                               HP +max_hp_i (直接乘算 — support directMods —, bonds snapshot at combat start)
 //   act1autochess_band28_buff 埃芒加德 命结之秘 the first max_respawn_cnt operator knock-downs of the battle revive at
-//                                               once at full HP (runs after every other death saver, items included;
-//                                               a new deployment for 坚固维式重锤's lock — items revivedInPlace)
+//                                               once — PRTS 备注 "“复活”的实现方式为：受益者因移动之外的原因退场时下次部署
+//                                               的再部署时间和费用归零": the knock-out stands (被击倒时 effects run) and the
+//                                               operator redeploys at once, free, where it lies (部署时 effects run, SP
+//                                               reset): items reviveNow, a `death` hook after M3茧甲's and before 阿戈尔
+//                                               5 / 不屈 (in place until 0.2.0, community report 「…砾和瑕光这种死亡和部
+//                                               署的叠层效果，如果有艾芒加德的3次复活似乎是无法触发」)
 //   act1autochess_band13_buff 克莱门莎 崇高牺牲 a <bond_id> operator knocked down ⇒ +its tier (等阶) <bond_id> layers
 //                                               (bond_add_type by_charlevel; no "已激活" in the text ⇒ requireActive false)
 //   act1autochess_band16_buff 大帝 加急调派     "每次部署后再部署时间减少50%": every deployment of an operator stacks one
-//                                               redeploy ×(1 + respawn_time) for the rest of the battle [ASSUMED cumulative:
-//                                               "每次" — the first redeploy is −50 % under either reading]
+//                                               redeploy ×(1 + respawn_time) for the rest of the battle, with no cap (PRTS
+//                                               卫戍协议：盟约 下半 / PRTS盟约记录 备注 "※该策略效果可无限叠加"; a 20-stack cap
+//                                               until 0.2.2 — GitHub #328, PR #329)
 //   act1autochess_band17_buff 桑葚 药枚实验     at combat start the player's units on the front-most (最右边) column: each
 //                                               attack has `prob` to gain 1 shield layer (max 1)
 //   act1autochess_band18_buff 休谟斯 回收利用   a ground (地面) operator's skill ends ⇒ a random operator on its 4
@@ -26,23 +31,27 @@
 //                                               elite or not) stand on the field get ATK +atk
 //   act2autochess_band3_buff  伊奥莱塔 统御号令 at combat start n = elite operators on the field ⇒ every elite operator
 //                                               ATK +atk_per_cnt × n, HP +max_hp_per_cnt × n (all 直接乘算)
-//   auto_chess_change_map     Touch 外勤医疗    "所有玩家场地上出现一名<预备干员-医疗>": while any alive player of the match
-//                                               holds band_amedic, every player's field gets the map character of the
+//   auto_chess_change_map     Touch 外勤医疗    "所有玩家场地上出现一名<预备干员-医疗>": once selected in this match, its
+//                                               retained team grant gives every player's field the map character of the
 //                                               variant whose common_condition holds for that player's elites on the field
 //                                               (condition_golden_chess_le cnt → 预备干员-医疗, _ge cnt → Touch), spawned at
-//                                               combat start on its stage slot (tokens.spawnMapChar)
+//                                               combat start on its stage slot (tokens.spawnMapChar). [ASSUMED] that slot's
+//                                               aggroSeq precedes ordinary initial operators; deploySeq stays the runtime spawn
 // Prep-only bands (economy / shop / grants / layers at prep end or round start) live in bands/meta.js.
 
 import {
   num, buffsOf, bandRecord, isOp, onField, isElite, tierOf, unitBonds, activeBondIds, playerOps, passiveBuff, fxOn,
   matchBands, gainLayers, alliesAround, N4, baseChessId, isGroundOp, directMods,
 } from '../support/index.js';
-import { weaknessRetype, addShieldLayer, PRIO_REVIVE, revivedInPlace } from '../items/battle.js';
+import { weaknessRetype, addShieldLayer, PRIO_RESPAWN, reviveNow } from '../items/battle.js';
 import { spawnMapChar } from '../tokens.js';
 
 export const AMEDIC_BAND = 'band_amedic';
-/** 'fatal' priority of 埃芒加德: after the operators' own items (PRIO_REVIVE / PRIO_RESPAWN) and every talent / skill saver. */
-export const PRIO_BAND_REVIVE = PRIO_REVIVE - 10;
+/**
+ * 'death' priority of 埃芒加德's revive: a knock-out (so after every `fatal` saver — kits', 坚固维式重锤's 不死), after the
+ * operator's own M3茧甲 (PRIO_RESPAWN 13), before 阿戈尔 5's first-knock-out revive (11) and 不屈 (10).
+ */
+export const PRIO_BAND_REVIVE = PRIO_RESPAWN - 1;
 
 const keyOf = (bandId, part = '') => `band:${bandId}${part ? `:${part}` : ''}`;
 const deployedOps = (battle, pid) => playerOps(battle, pid, { fieldOnly: true });
@@ -68,18 +77,15 @@ const BY_KEY = {
     const max = Math.floor(num(p.max_respawn_cnt, 3));
     if (!(max > 0)) return;
     let used = 0;
-    battle.on('fatal', (c) => {
+    battle.on('death', (c) => {
       const u = c.unit;
-      if (c.prevented || used >= max || !isOp(u) || u.ownerId !== ps.playerId || !u.alive) return;
+      if (used >= max || !isOp(u) || u.ownerId !== ps.playerId || !reviveNow(battle, c, 'band')) return;
       used++;
-      c.prevented = true;
-      u.hp = u.s.maxHp;
-      revivedInPlace(u); // in place for PRTS's 0-time / 0-cost redeploy: a new deployment for 坚固维式重锤's lock (items)
       fxOn(battle, 'revive', u, keyOf(bandId), bandId, { left: max - used });
     }, { priority: PRIO_BAND_REVIVE });
   },
 
-  // 克莱门莎 崇高牺牲
+  // 克莱门莎 崇高牺牲: PRTS requires the 阿戈尔 bond to be active.
   act1autochess_band13_buff(battle, ps, p, bandId) {
     const bond = typeof p.bond_id === 'string' && p.bond_id ? p.bond_id : null;
     if (!bond) return;
@@ -88,7 +94,7 @@ const BY_KEY = {
       const u = c.unit;
       if (c.reason !== 'killed' || !isOp(u) || u.ownerId !== ps.playerId || !unitBonds(u).includes(bond)) return;
       const n = byLevel ? tierOf(u) : Math.max(1, Math.floor(num(p.value, 1)));
-      if (gainLayers(battle, { playerId: ps.playerId, bonds: bond, n, requireActive: false, source: u, reason: 'band' }) > 0) {
+      if (gainLayers(battle, { playerId: ps.playerId, bonds: bond, n, requireActive: true, source: u, reason: 'band' }) > 0) {
         fxOn(battle, 'layer', u, keyOf(bandId), bandId, { bond, n });
       }
     });
@@ -102,7 +108,7 @@ const BY_KEY = {
     battle.on('deploy', (c) => {
       const u = c.unit;
       if (!isOp(u) || u.ownerId !== ps.playerId) return;
-      battle.addBuff(u, { key, mods: { redeployMul: mul }, refresh: 'stack', stacks: 1, maxStacks: 20, persist: true, allowDead: true });
+      battle.addBuff(u, { key, mods: { redeployMul: mul }, refresh: 'stack', stacks: 1, maxStacks: Infinity, persist: true, allowDead: true });
     });
   },
 
@@ -207,9 +213,9 @@ const BY_KEY = {
 // Touch 外勤医疗 (auto_chess_change_map, every player's field)
 
 /** Map-character variants of band_amedic: [{ cond, cnt, chars: [tokenId…] }]. */
-export function amedicVariants() {
+export function amedicVariants(bandId = AMEDIC_BAND) {
   const out = [];
-  for (const b of buffsOf(bandRecord(AMEDIC_BAND))) {
+  for (const b of buffsOf(bandRecord(bandId))) {
     if (b.key !== 'auto_chess_change_map') continue;
     const chars = new Set();
     for (const [k, v] of Object.entries(b.p)) if (k.includes('#') && num(v) > 0) chars.add(k.split('#')[0]);
@@ -233,12 +239,17 @@ function installMapChars(battle) {
   const holders = battle.players.filter((ps) => matchBands(battle, ps.playerId).includes(AMEDIC_BAND));
   if (!holders.length) return;
   battle.on('battleStart', () => {
+    const chars = [];
     for (const ps of holders) {
       const elites = deployedOps(battle, ps.playerId).filter(isElite).length;
-      for (const id of amedicCharsFor(elites, variants)) {
-        const u = spawnMapChar(battle, ps.playerId, id);
-        if (u) fxOn(battle, 'summon', u, keyOf(AMEDIC_BAND), AMEDIC_BAND);
-      }
+      for (const id of amedicCharsFor(elites, bandRecord(ps.bandId)?.effectRef === AMEDIC_BAND ? amedicVariants(ps.bandId) : variants)) chars.push({ playerId: ps.playerId, id });
+    }
+    for (const [i, { playerId, id }] of chars.entries()) {
+      // The reserve medic occupies this stage slot in preparation; Touch replaces it at battle start. [ASSUMED]
+      // Replacement preserves the slot's priority before ordinary deployments. Shared-field ordering between
+      // prepared characters follows player order, as for other initial placements (lifecycle.js).
+      const u = spawnMapChar(battle, playerId, id, { preBattleAggroSeq: i - chars.length });
+      if (u) fxOn(battle, 'summon', u, keyOf(AMEDIC_BAND), AMEDIC_BAND);
     }
   });
 }

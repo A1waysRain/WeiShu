@@ -41,6 +41,12 @@ function view(info, opts) {
   return new U.UnitView(ctx, { id: 1, side: 'enemy', kind: 'enemy', tier: 1, x: 6, y: 10, maxHp: 1000, motion: 'FLY', ...info });
 }
 const width = (key) => A.enemies[key].spine.bounds.width;
+/**
+ * How far a model's setup-pose box reaches above its own origin (render/units.js headTilesForUnit): the bar clears the
+ * visible top, and these fixtures' synthetic box is deliberately not feet-anchored (y −150 of height 390 → 240 units),
+ * so a bar placed on the raw `height` would float 390/240 ≈ 1.6× too high.
+ */
+const topUnits = (v) => { const b = v.actor.entry.bounds; return Number.isFinite(b.y) ? b.y + b.height : b.height; };
 
 describe('#9 enemy models at their official prefab scale', () => {
   test('data: 威龙 0.16 / 0.27, 妖怪 0.20 / 0.27, 妖怪MKII 0.22 / 0.27; standard-size enemies carry none', () => {
@@ -69,8 +75,10 @@ describe('#9 enemy models at their official prefab scale', () => {
     assert.equal(U.enemyModelScale(E.enemy_1005_yokai_3), 0.5926);
     assert.equal(U.enemyModelScale(null), 1);
     assert.equal(U.enemyModelScale({ modelScale: 'x' }), 1);
-    // the HP bar sits on its (smaller) model: 390 units × 1/320 × 0.5926 × 0.92, clamped at 0.55
-    assert.ok(Math.abs(drone._headTiles - Math.max(0.55, 390 * UNIT.modelScale * 0.5926 * 0.92)) < 1e-9);
+    // the HP bar sits on its (smaller) model, on however far the setup-pose box reaches *above the origin*
+    // (bounds.y + bounds.height — feet-anchored models have y ≈ 0, 逐腐兽's origin is mid-body), × 1/320 × 0.5926 × 0.92,
+    // clamped at 0.55
+    assert.ok(Math.abs(drone._headTiles - Math.max(0.55, topUnits(drone) * UNIT.modelScale * 0.5926 * 0.92)) < 1e-9, `bar ${drone._headTiles}`);
     assert.ok(bird._headTiles > drone._headTiles);
   });
 
@@ -84,6 +92,55 @@ describe('#9 enemy models at their official prefab scale', () => {
     assert.ok(Math.abs(sailor._headTiles - UNIT.headroom * 0.8889) < 1e-9, `码头水手 ${sailor._headTiles}`);
     assert.equal(bird._headTiles, UNIT.headroom, 'a standard-size model keeps the chibi headroom');
     assert.equal(boss._headTiles, 2.2);
+  });
+});
+
+// The official's own model quirks, read from its battle prefabs (tools/local-extract/enemy_model_offsets.py, swept over
+// all 243 enemies of the mode 2026-10-05; PR #211 by @xcdoge, taken by the owner's decision of 2026-10-06):
+// `modelScale` only carries the horizontal product of Graphic / FaceSwitcher / Spine, so two enemies are stretched
+// vertically (帝国炮火先兆者 / 帝国炮火中枢先兆者: Graphic scale (0.19, 0.24, 0.24) → sy/sx = 1.263) and one is mirrored
+// (木制瑞印: sx −0.4, sy 0.4 → the official draws it flipped). The renderer applies the stretch to the skeleton's Y scale
+// (and to the bar height) and flips `flip` for a mirrored model, on top of the usual direction flip.
+describe('official prefab quirks: vertical stretch and mirrored models', () => {
+  test('data: exactly the two 先兆者 stretch, exactly 木制瑞印 mirrors', () => {
+    assert.equal(E.enemy_1112_emppnt.modelScaleY, 1.263);
+    assert.equal(E.enemy_1112_emppnt_2.modelScaleY, 1.263);
+    assert.equal(E.enemy_1196_msfyin.mirrorX, true);
+    assert.equal(E.enemy_1112_emppnt.modelScale, 0.7037, 'the horizontal product is unchanged');
+    for (const [k, e] of Object.entries(E)) {
+      if (e.modelScaleY != null) assert.ok(k === 'enemy_1112_emppnt' || k === 'enemy_1112_emppnt_2', `stretched: ${k}`);
+      if (e.mirrorX != null) assert.equal(k, 'enemy_1196_msfyin', `mirrored: ${k}`);
+    }
+  });
+
+  test('UnitView: the stretched pair is 1.263× taller than wide, its bar sits proportionally higher', async () => {
+    const drone = view({ defId: 'enemy_1112_emppnt' });
+    const plain = view({ defId: 'enemy_1005_yokai' });
+    await tick(); await tick();
+    for (const v of [drone, plain]) { assert.ok(v.spineReady); v.update(1 / 60, cam(), 0); }
+    const aspect = (v) => Math.abs(v.actor.spine.scale.y) / Math.abs(v.actor.spine.scale.x);
+    assert.ok(Math.abs(aspect(drone) - 1.263) < 1e-9, `先兆者 sy/sx ${aspect(drone)}`);
+    assert.ok(Math.abs(aspect(plain) - 1) < 1e-9, 'a uniform model stays 1:1');
+    assert.equal(U.enemyModelScaleY(E.enemy_1112_emppnt), 1.263);
+    assert.equal(U.enemyModelScaleY(E.enemy_1005_yokai), 1);
+    assert.equal(U.enemyModelScaleY(null), 1);
+    assert.equal(U.enemyModelScaleY({ modelScaleY: 'x' }), 1);
+    assert.equal(U.enemyModelScaleY({ modelScaleY: 99 }), 1, 'absurd values fall back to uniform');
+    // the HP bar rides the stretched model: (bounds.y + bounds.height) × 1/320 × 0.7037 × 1.263 × 0.92
+    assert.ok(Math.abs(drone._headTiles - topUnits(drone) * UNIT.modelScale * 0.7037 * 1.263 * 0.92) < 1e-9, `bar ${drone._headTiles}`);
+    assert.ok(drone._headTiles > plain._headTiles);
+  });
+
+  test('UnitView: a mirrored prefab is drawn flipped against an unmirrored model facing the same way', async () => {
+    const mirrored = view({ defId: 'enemy_1196_msfyin', motion: 'WALK' });
+    const normal = view({ defId: 'enemy_1007_slime', motion: 'WALK' });
+    await tick(); await tick();
+    for (const v of [mirrored, normal]) { assert.ok(v.spineReady); v.update(1 / 60, cam(), 0); }
+    assert.equal(mirrored.mirrorX, true);
+    assert.equal(normal.mirrorX, false);
+    assert.equal(mirrored.visFacing, normal.visFacing, 'both face the same way');
+    assert.equal(Math.sign(mirrored.actor.spine.scale.x), -Math.sign(normal.actor.spine.scale.x), 'the mirrored model flips');
+    assert.ok(Math.abs(mirrored.actor.spine.scale.y) > 0);
   });
 });
 

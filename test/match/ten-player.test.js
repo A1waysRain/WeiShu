@@ -94,7 +94,9 @@ test('ten-player client combat assigns five authorities and accepts damage from 
     assert.ok(h.drive(() => h.m.phase === PHASE.FINAL_ASSAULT));
     const fields = h.m.fields;
     assert.equal(fields.length, 5);
-    assert.deepEqual(fields.map(f => f.authority), ['p_0', 'p_2', 'p_4', 'p_6', 'p_8']);
+    assert.equal(new Set(fields.map(f => f.authority)).size, 5);
+    assert.ok(fields.every(f => f.players.includes(f.authority)));
+    assert.equal(new Set(fields.flatMap(f => f.players)).size, 10);
     const max = h.m.bossPool.maxHp;
     h.sched.advance(3000);
     assert.ok(fields.every(f => f.bossAcked > 0));

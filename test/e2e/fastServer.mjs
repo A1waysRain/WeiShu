@@ -20,8 +20,20 @@
 // the hand: the seat keeps no board and leaks).
 // SP_ELIMINATE=<humanIdx,…>: those humans (seat order) are eliminated at the jump, before the round's boss pairing — an
 // eliminated spectator from the first round on (test/ui/watch-bonds.e2e.test.js, the Final Assault).
+// SP_SEAT_PAIRS=1: the boss pairs follow the seat order of the players still in — (1,2), (3,4), an odd one alone — instead
+// of the seeded draw per match (0.2.5) — test/ui/watch-bonds.e2e.test.js: the eliminated spectator follows the host,
+// which then always fights in the pair.
 // SP_STAGE=<stageId>: every match is played on this stage instead of the drawn one (test/ui/feedback1-placement.e2e.test.js:
 // 战场#08's pool).
+// SP_START_LEVEL=<1..6>: the starter kit also puts every human's 调度中心 at this level (and rerolls its shop there, before
+// SP_START_SHOP stocks its first slots) — test/ui/diy.e2e.test.js: a tier-5 自选 piece is sold from level 5.
+// SP_FINISH_AFTER=<round>: the match ends (a defeat: m.result, the RESULT screen) once that round has settled, instead
+// of going on to the next round — test/ui/standin.e2e.test.js: the result lineup of the board just fought with.
+// SP_PLUGINS_DIR=<dir>: the server's plugin folders (startServer `pluginsDir`) — test/ui/plugins.e2e.test.js: a cosmetic
+// plugin switched on during a match.
+// SP_SLOW_SPAWNS=<humanIdx>:<factor>: that human's (seat order) normal battles spawn their enemies at <factor> × the
+// scheduled times (and intervals) — a leaker's battle then runs to the round's time limit, long after a teammate's quick
+// one (test/ui/watch-bonds.e2e.test.js, "after the own battle": a window for watching and a reload).
 // Not a test file (node --test runs it as a no-op module when NODE_TEST_CONTEXT is set).
 
 import { startServer } from '../../server/index.js';
@@ -45,7 +57,12 @@ if (!process.env.NODE_TEST_CONTEXT) {
   const botChess = String(process.env.SP_BOT_CHESS || '').split(',').map((x) => x.trim()).filter(Boolean);
   const autoPlace = process.env.SP_AUTO_PLACE === '1';
   const eliminate = String(process.env.SP_ELIMINATE || '').split(',').map((x) => x.trim()).filter(Boolean).map(Number);
+  const seatPairs = process.env.SP_SEAT_PAIRS === '1';
   const forcedStage = String(process.env.SP_STAGE || '').trim();
+  const startLevel = Math.max(0, Math.min(6, Number(process.env.SP_START_LEVEL) || 0));
+  const finishAfter = Math.max(0, Number(process.env.SP_FINISH_AFTER) || 0);
+  const [slowIdx, slowFactor] = String(process.env.SP_SLOW_SPAWNS || '').split(':').map(Number);
+  const slowSpawns = Number.isInteger(slowIdx) && slowIdx >= 0 && slowFactor > 0 ? { idx: slowIdx, factor: slowFactor } : null;
 
   class FastMatch extends Match {
     constructor(opts) {
@@ -72,6 +89,16 @@ if (!process.env.NODE_TEST_CONTEXT) {
       humans.forEach((ps, i) => { if (ps.alive) this._starterKit(ps, Array.isArray(humanKits[i]) ? humanKits[i] : null); });
       if (botChess.length) for (const ps of this.alivePlayers()) if (ps.isBot) { this._give(ps, botChess); ps.recompute(); }
       if (autoPlace) this._placeRound = this.round;
+    }
+
+    _planBossWaves() {
+      // the match's pairs before its first draw: pairPlayers keeps given pairs (server/match/finalAssault.js)
+      if (seatPairs && !this.bossPairs) {
+        const ids = this.alivePlayers().map((ps) => ps.playerId); // seat order (Match.order)
+        this.bossPairs = [];
+        for (let i = 0; i < ids.length; i += 2) this.bossPairs.push(ids.slice(i, i + 2));
+      }
+      super._planBossWaves();
     }
 
     /** Chess ids into the hand's free slots (copies taken from the pool when it has them). */
@@ -116,6 +143,24 @@ if (!process.env.NODE_TEST_CONTEXT) {
       this.markPublic();
     }
 
+    afterSettle() {
+      if (finishAfter && this.round >= finishAfter && !this.ended) { this.finish({ victory: false, reason: 'defeat' }); return; }
+      super.afterSettle();
+    }
+
+    _ccField(args) {
+      const f = super._ccField(args);
+      const ps = slowSpawns && f.kind === 'normal' ? this.order.filter((x) => !x.isBot)[slowSpawns.idx] : null;
+      if (ps && f.players.includes(ps.playerId)) {
+        for (const x of f.spec.spawns) {
+          if (!x || !Number.isFinite(Number(x.time))) continue;
+          x.time = Number(x.time) * slowSpawns.factor;
+          if (Number(x.interval) > 0) x.interval = Number(x.interval) * slowSpawns.factor;
+        }
+      }
+      return f;
+    }
+
     scheduleBotPrep(ps, i = 0) {
       if (!idleBots) { super.scheduleBotPrep(ps, i); return; }
       const round = this.round;
@@ -152,6 +197,11 @@ if (!process.env.NODE_TEST_CONTEXT) {
         if (slot < 0 || !this.gd.item(itemId)) continue;
         try { ps.hand[slot] = ps.newPiece('item', itemId); } catch { /* best effort */ }
       }
+      if (startLevel > 0) {
+        ps.shop.level = Math.min(startLevel, this.gd.maxShopLevel);
+        ps.shop.upgradePrice = this.gd.upgradeBase(ps.shop.level) ?? 0;
+        ps.rollShop({ keepFrozen: false });
+      }
       kitShop.forEach((id, i) => {
         if (i < ps.shop.slots.length && this.gd.chess(id)) ps.shop.slots[i] = { kind: 'chess', id, basePrice: this.gd.chessPrice(id), frozen: false, sold: false };
       });
@@ -160,7 +210,8 @@ if (!process.env.NODE_TEST_CONTEXT) {
     }
   }
 
-  const srv = await startServer({ port: Number(process.env.PORT) || 0, host: process.env.HOST || '127.0.0.1', quiet: true, MatchClass: FastMatch });
+  const srv = await startServer({ port: Number(process.env.PORT) || 0, host: process.env.HOST || '127.0.0.1', quiet: true, MatchClass: FastMatch,
+    ...(process.env.SP_PLUGINS_DIR ? { pluginsDir: process.env.SP_PLUGINS_DIR } : {}) });
   console.log(`fast server on ${srv.url} (timers ×${timerScale}, combat ${combatSpeed}×${startAt ? `, first round ${startAt}` : ''})`);
   const stop = () => { srv.close().finally(() => process.exit(0)); };
   process.on('SIGTERM', stop);

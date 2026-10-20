@@ -4,10 +4,37 @@ import assert from 'node:assert/strict';
 import { PHASE, ERR } from '../../shared/constants.js';
 import { Match } from '../../server/match/Match.js';
 import { StubMatch } from '../../server/match/StubMatch.js';
-import { DATA, makeMatch, checkInvariants, give, chessOfTier } from './harness.js';
+import { DATA, makeMatch, checkInvariants, give, giveItem, chessOfTier } from './harness.js';
 import { bossPoolHp } from '../../server/match/finalAssault.js';
 
 const STATUSES = ['acting', 'ready', 'deciding', 'combat', 'done', 'helping', 'left', 'dead'];
+
+test('public throttling starts at broadcast time even when building the previous snapshot was delayed', () => {
+  let now = 100;
+  let revision = 0;
+  const sent = [];
+  const timers = [];
+  const match = {
+    _lastPubAt: 0,
+    sched: {
+      now: () => now,
+      setTimeout: (fn, delay) => { timers.push({ fn, at: now + delay }); return timers.length; },
+    },
+    publicView: () => {
+      if (revision === 0) now += 16;
+      return { t: 'm.public', serverNow: now, revision: ++revision };
+    },
+    broadcast: (view) => sent.push(view.serverNow),
+    _maybeSendPublic: Match.prototype._maybeSendPublic,
+  };
+  match._maybeSendPublic(false);
+  now = 200;
+  match._maybeSendPublic(false);
+  assert.deepEqual(sent, [116], 'the second frame waits for the full interval after the first broadcast');
+  now = timers[0].at;
+  timers[0].fn();
+  assert.deepEqual(sent, [116, 216]);
+});
 
 test('constructor validation mirrors the stub; start() sends the first m.public and one m.private per human', () => {
   assert.throws(() => new Match({ seats: [] }), TypeError);
@@ -51,6 +78,7 @@ test('m.private shape in PREP matches DESIGN §8.3 (pieces, slots, bonds, effect
     assert.ok(s.kind === 'chess' || s.kind === 'item');
   }
   assert.equal(priv.shop.rewardOffer, null);
+  assert.equal(priv.personalChoice, null);
   assert.equal(priv.deployCap, 8);
   assert.ok(priv.effects.some((e) => e.iconKind === 'band' && e.name));
   assert.ok(priv.nextEnemies.length > 0);
@@ -106,6 +134,45 @@ test('disconnect: the seat keeps playing; draft turns / prep auto-resolve at dea
   const got = h.sent.slice(mark).filter(([id]) => id === 'p_1').map(([, x]) => x.t);
   assert.ok(got.includes('m.public') && got.includes('m.private') && got.includes('m.field') && got.includes('b.snap'), got.join());
   assert.equal(m.publicView().players.find((p) => p.playerId === 'p_1').connected, true);
+  m.dispose();
+});
+
+test('教鞭: simultaneous private choices survive reconnect; foreign, duplicate and old IDs cannot add bounties', () => {
+  const h = makeMatch({ mode: 'coop', humans: 2, spectators: ['watcher'], seed: 63, fake: true }).start();
+  h.toPrep(1);
+  const m = h.m, a = h.ps('p_0'), b = h.ps('p_1');
+  for (const ps of [a, b]) {
+    const art = giveItem(m, ps, 'chess_item_6_03_m');
+    assert.deepEqual(ps.useArt(art.uid, 10, 5), { ok: true });
+  }
+  const aChoice = a.privateView().personalChoice, bChoice = b.privateView().personalChoice;
+  assert.notEqual(aChoice.id, bChoice.id);
+  assert.equal(m.handle('p_0', { t: 'g.choice', idx: 0, choiceId: bChoice.id }).error, ERR.BAD_TARGET);
+  assert.equal(a.bounties.length + b.bounties.length, 0);
+  m.onDisconnect('p_0');
+  m.onReconnect('p_0');
+  assert.deepEqual(h.lastTo('p_0', 'm.private').personalChoice, aChoice);
+  m.flush(true);
+  assert.deepEqual(h.lastTo('p_1', 'm.private').personalChoice, bChoice);
+  assert.ok(!h.allTo('watcher', 'm.private').length);
+  assert.ok(!JSON.stringify(m.publicView()).includes(aChoice.id));
+  assert.ok(!JSON.stringify(m.prepFieldMeta(a)).includes(aChoice.id));
+  assert.deepEqual(m.handle('p_0', { t: 'g.choice', idx: 1, choiceId: aChoice.id }), { ok: true });
+  m.flush(true);
+  assert.equal(h.lastTo('p_0', 'm.private').personalChoice, null);
+  assert.equal(m.handle('p_0', { t: 'g.choice', idx: 1, choiceId: aChoice.id }).error, ERR.BAD_TARGET);
+  const next = giveItem(m, a, 'chess_item_6_03_m');
+  assert.deepEqual(a.useArt(next.uid, 10, 5), { ok: true });
+  const nextId = a.personalChoice.id;
+  assert.notEqual(nextId, aChoice.id);
+  assert.equal(m.handle('p_0', { t: 'g.choice', idx: 0, choiceId: aChoice.id }).error, ERR.BAD_TARGET);
+  assert.equal(a.personalChoice.id, nextId);
+  assert.equal(a.bounties.length, 1);
+  m.onDisconnect('p_1');
+  h.sched.advance(m.deadline - h.sched.now() + 1);
+  m.onReconnect('p_1');
+  assert.equal(h.lastTo('p_1', 'm.private').personalChoice, null);
+  assert.equal(b.bounties.length, 1, 'offline choice picked at the existing PREP deadline');
   m.dispose();
 });
 
@@ -181,9 +248,9 @@ test('onLeave: a quitter has no place in the Final Assault pairing or the boss p
   assert.equal(alive.length, 2);
   assert.ok(!alive.includes(first));
   h.drive(() => m.phase === PHASE.FINAL_ASSAULT);
-  assert.deepEqual(m.fields.map((f) => f.players), [alive], 'one boss field for the two players left');
+  assert.deepEqual(m.fields.map((f) => [...f.players].sort()), [[...alive].sort()], 'one boss field for the two players left');
   assert.equal(m.bossPool.maxHp, bossPoolHp(m.gd, m.bossId, 2), 'the co-op boss pool of two alive players');
-  assert.equal(m.bossPool.maxHp, m.gd.boss(m.bossId).bloodPoint[m.gd.difficulty], 'bloodPoint, no alive-player factor (DESIGN §20.10)');
+  assert.equal(m.bossPool.maxHp, m.gd.boss(m.bossId).bloodPoint[m.gd.difficulty] * 2, 'bloodPoint × the two players left; the quitter does not count (DESIGN §25.13.4)');
   const end = h.runToEnd();
   assert.equal(end.victory, true);
   assert.equal(end.players.find((p) => p.playerId === first).roundsPassed, 0);

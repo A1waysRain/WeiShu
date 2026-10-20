@@ -11,8 +11,10 @@
 // direction wheel to re-orient it in place (research 09 §1.2 — "drag the unit onto its own tile and swipe").
 // Everything is judged at the pointer (user playtest #4 item 1: the ground is drawn as tiles): a press / hover is on the
 // piece standing on the tile under it (`hitPiece`, render/pick.js), and while dragging the target, `tileHover` and the
-// legality are that tile — an item dropped on a unit's tile goes to that unit; app.js holds the dragged ghost under
-// the pointer. A release over DOM UI covering the canvas (the shop bar) is 'outside' (mouse and touch alike).
+// legality are that tile — an item dropped on a unit's tile goes to that unit. app.js draws a dragged unit standing on
+// that tile while it is a legal target (`dragStandTile`, the official deploy drag) and held under the pointer
+// otherwise; an item plate stays on the pointer. A release over DOM UI covering the canvas (the shop bar) is 'outside'
+// (mouse and touch alike).
 //
 // Events emitted through `emit(name, payload)`:
 //   pieceHover     { uid, piece, clientX, clientY } | { uid: null }            (mouse/pen hover changes)
@@ -80,6 +82,21 @@ export function resolveDrop(p) {
   return { kind: 'drop', target: slot };
 }
 
+/**
+ * The tile a dragged UNIT is drawn standing on, from a `pieceDragMove` payload: the drop target under the pointer while
+ * it is legal — a board tile, or a bench slot (row HAND_ROW) — as `{ row, col, bench }` in board space; null otherwise
+ * (no target, an illegal tile, a temp slot, the pointer over DOM UI such as the shop bar): the unit is then held under
+ * the pointer. As in the official deploy drag (the owner's recording of 2026-10-09) the model stands on the tile the
+ * finger is on, and moving within that tile leaves it where it is. app.js never snaps an item plate.
+ */
+export function dragStandTile(move, geo = GEO) {
+  const t = move && move.legal === true ? move.target : null;
+  if (!t) return null;
+  if (t.area === 'board' && Number.isInteger(t.row) && Number.isInteger(t.col)) return { row: t.row, col: t.col, bench: false };
+  if (t.area === 'hand' && Number.isInteger(t.idx)) return { row: geo.HAND_ROW, col: t.idx, bench: true };
+  return null;
+}
+
 /** Legality via the UI callback (board → (piece,row,col); hand → (piece, HAND_ROW, idx)). Throwing ⇒ illegal. */
 export function isLegal(canPlace, piece, slot) {
   if (!slot || slot.area === 'temp' || slot.area === 'outside') return false;
@@ -108,7 +125,7 @@ export function createDragController(hooks) {
   const clearT = h.clearTimeout || ((id) => clearTimeout(id));
   let editable = false;
   let canPlace = typeof h.canPlace === 'function' ? h.canPlace : null;
-  /** @type {null | { mode: 'pressed'|'dragging'|'held', pointerId, pointerType, piece, from, sx, sy, timer }} */
+  /** @type {null | { mode: 'pressed'|'dragging'|'held', pointerId, pointerType, piece, from, sx, sy, timer, last? }} */
   let st = null;
   let hoverUid = null;
   let hoverTileKey = '';
@@ -145,6 +162,7 @@ export function createDragController(hooks) {
   }
 
   function moveDrag(e) {
+    st.last = e;
     const tile = tileAt(e.x, e.y);
     const over = overCanvas(e.clientX, e.clientY);
     const slot = over && tile ? tileSlot(tile) : null;
@@ -243,6 +261,15 @@ export function createDragController(hooks) {
       if (st) return;
       setHoverPiece(null, e || {});
       setHoverTile(null);
+    },
+
+    /**
+     * Judge the drag again at the last pointer position: the ground under a still pointer changes while the camera
+     * moves (the shop-collapsed zoom of a deploy, GitHub #602), so the target tile, its legality and the dragged
+     * piece's place (pieceDragMove, tileHover) follow the camera, not only the pointer. No-op unless dragging.
+     */
+    refresh() {
+      if (st && st.mode === 'dragging' && st.last) moveDrag(st.last);
     },
 
     /** Abort any interaction (piece list replaced, view destroyed…). */

@@ -3,11 +3,18 @@
 // files that actually exist on disk into data/assets.json. Entries whose files
 // are missing are dropped (never emitted as broken URLs); a `literal(value)` node
 // is emitted as it is (no files behind it).
+//
+// A dropped entry is never silent: resolveTemplate reports every leaf none of whose
+// alternatives is on disk in `droppedLeaves` (a leaf whose file is missing is an
+// entry the client loses — a sound that never plays, not a broken URL it recovers
+// from), besides the wider `misses` list (leaves and unresolved Spine models). The
+// caller prints that list, keeps it in .cache/assets-report.json and can turn it
+// into a failure (fetch-assets.mjs --strict / SP_ASSETS_STRICT).
 
 import { existsSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { assetUrl, mirrorUrl } from './sources.mjs';
+import { assetUrl, githubSourceUrl, mirrorUrl } from './sources.mjs';
 
 /** Manifest schema version (bump on breaking shape changes). */
 export const MANIFEST_VERSION = 1;
@@ -53,15 +60,21 @@ export function collectLeaves(node, path = '', out = []) {
 export async function downloadLeaves(leaves, dl, root, label = 'files') {
   const tried = new Map(leaves.map((l) => [l, 0]));
   const blocked = new Set();
-  const satisfied = (l) => l.leaf.alts.slice(0, tried.get(l)).some((a) => existsSync(join(root, a.rel)));
+  const satisfied = (l) => l.leaf.alts.slice(0, tried.get(l)).some((a) =>
+    (!dl.verifier || dl.accepted.has(a.rel)) && existsSync(join(root, a.rel)));
   let last = new Map();
   for (let round = 0; round < 8; round++) {
     const jobs = [];
     for (const l of leaves) {
       const t = tried.get(l);
       if (blocked.has(l)) continue;
+      if (t > 0 && last.get(l.leaf.alts[t - 1].rel)?.status === 'error') {
+        blocked.add(l);
+        // A failed primary cannot establish that untried cached alternatives are orphans.
+        if (dl.verifier) for (const a of l.leaf.alts.slice(t)) dl.preserved.add(a.rel);
+        continue;
+      }
       if (t > 0 && satisfied(l)) continue;
-      if (t > 0 && last.get(l.leaf.alts[t - 1].rel)?.status === 'error') { blocked.add(l); continue; }
       if (t >= l.leaf.alts.length) continue;
       jobs.push(l.leaf.alts[t]);
       tried.set(l, t + 1);
@@ -80,10 +93,15 @@ export async function downloadLeaves(leaves, dl, root, label = 'files') {
  * @param {Map<string, any>} o.spine resolved Spine entries by model key
  * @param {(rel:string)=>string|undefined} [o.sourceOf] URL a file was downloaded from (ledger), to report
  *   fallbacks that share the primary's path (e.g. an enemy icon taken from its base id)
- * @returns {{ value: any, misses: string[], fallbacks: string[], files: Set<string> }}
+ * @param {(rel:string)=>boolean} [o.available] whether this run accepted the file
+ * @returns {{ value: any, misses: string[], droppedLeaves: string[], fallbacks: string[], files: Set<string> }}
+ *   `droppedLeaves`: the dotted paths of the leaves no alternative of which is on disk, i.e. exactly the entries the
+ *   manifest loses here (a subset of `misses`, which also names the unresolved Spine models) — what a caller reports
+ *   as dropped, and what --strict fails on.
  */
-export function resolveTemplate(template, { root, spine, sourceOf = () => undefined }) {
+export function resolveTemplate(template, { root, spine, sourceOf = () => undefined, available = () => true }) {
   const misses = [];
+  const droppedLeaves = [];
   const fallbacks = [];
   const files = new Set();
   const walk = (node, path) => {
@@ -92,15 +110,20 @@ export function resolveTemplate(template, { root, spine, sourceOf = () => undefi
     if (isLeaf(node)) {
       for (let i = 0; i < node.alts.length; i++) {
         const a = node.alts[i];
-        if (existsSync(join(root, a.rel))) {
+        if (available(a.rel) && existsSync(join(root, a.rel))) {
           const src = sourceOf(a.rel);
+          // Provenance only: disabling/changing a proxy does not change the
+          // identity of a previously downloaded asset.
           const primary = node.alts[0].urls.flatMap((u) => [u, mirrorUrl(u)]);
           if (i > 0) fallbacks.push(`${path} ← ${src || a.urls[0]}`);
-          else if (src && !primary.includes(src)) fallbacks.push(`${path} ← ${src}`);
+          else if (src && !primary.includes(githubSourceUrl(src))) fallbacks.push(`${path} ← ${src}`);
           files.add(a.rel);
           return assetUrl(a.rel);
         }
       }
+      // No alternative on disk: the entry is left out of the manifest, which is a real loss (never a broken URL) — so
+      // it is named as a dropped leaf, not only among the misses.
+      droppedLeaves.push(path);
       misses.push(path);
       return undefined;
     }
@@ -110,7 +133,12 @@ export function resolveTemplate(template, { root, spine, sourceOf = () => undefi
       for (const u of [e.skel, e.atlas, ...e.textures]) files.add(u.replace(/^\/assets\//, ''));
       return e;
     }
-    if (Array.isArray(node)) return node.map((x, i) => walk(x, `${path}[${i}]`)).filter((x) => x !== undefined);
+    if (Array.isArray(node)) {
+      const lines = node.map((x, i) => walk(x, `${path}[${i}]`)).filter((x) => x !== undefined);
+      // An array whose every line is missing on disk is a missing entry, like a missing leaf (e.g. a voice slot whose
+      // lines were never downloaded here): dropped, never an empty [] that reads as a slot with no lines.
+      return lines.length || !node.length ? lines : undefined;
+    }
     if (typeof node !== 'object') return node;
     const out = {};
     for (const [k, v] of Object.entries(node)) {
@@ -123,7 +151,7 @@ export function resolveTemplate(template, { root, spine, sourceOf = () => undefi
   };
   const isContainer = (v) => v && typeof v === 'object' && !isLeaf(v) && !isModelRef(v) && !isLiteral(v);
   const value = walk(template, '');
-  return { value, misses, fallbacks, files };
+  return { value, misses, droppedLeaves, fallbacks, files };
 }
 
 /**

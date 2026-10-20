@@ -1,7 +1,7 @@
 // User playtest #6 follow-up — a merge's elite goes to the board when it consumed a deployed copy. The user (first-hand,
 // official game): "官方就是合成精锐时，如果消耗了场上的干员，精锐会出现在场上那个位置". PRTS 卫戍协议/帮助 §干员的获得与精锐化:
 // "不获得第3名干员，销毁已有的2名初始干员，发送1名【精锐】状态的该干员至手牌区（若消耗已部署至作战区的干员，则发送至作战区
-// 对应位置）". Remake (server/match/PlayerState.js _mergeChess, board.js mergeTile): the elite takes the tile and facing of the
+// 对应位置）". Remake (server/match/player/acquire.js _mergeChess, board.js mergeTile): the elite takes the tile and facing of the
 // consumed copy that deploys first (row desc, col asc — [ASSUMED] when several stood on the board); a 突变细胞 carrier is
 // destroyed before its gain, so its tile never counts; with no deployed copy it goes to the hand (overflow temp).
 // Equipment returns to the hand ("干员晋级后已配发装备会回收至整备区"), the copies' summons are removed and the elite on
@@ -182,7 +182,7 @@ test('equipment: the consumed copies\' items return to the hand, the elite on th
   m.dispose();
 });
 
-test('equipment with the hand and temp full: the elite keeps up to its 2 equip slots, any further item is destroyed (logged)', () => {
+test('equipment with a full visible bench: all four returned items remain in the overflow queue', () => {
   const { m, ps } = prep({ seed: 47 });
   const [id] = meleeTier1(m);
   const a = deploy(m, ps, id, 'UP');
@@ -199,15 +199,15 @@ test('equipment with the hand and temp full: the elite keeps up to its 2 equip s
   const warn = m.log.warn;
   m.log.warn = (s) => { warns.push(String(s)); };
   stock(m, ps, id);
-  assert.deepEqual(m.handle('p_0', { t: 'g.buy', slot: 0 }), { ok: true }, 'a merge-completing buy needs no hand slot');
+  assert.equal(m.handle('p_0', { t: 'g.buy', slot: 0 }).error, 'HAND_FULL', 'a full hand refuses the purchase, also a merge-completing one (GitHub #82)');
+  assert.ok(ps.acquireChess(id, { source: 'grant' }), 'a gained copy completes the merge');
   m.log.warn = warn;
   const elite = ps.board.get(want);
   assert.ok(elite && m.gd.isGolden(elite.id), 'the elite took the first deployed copy\'s tile');
-  assert.equal(elite.items.length, m.gd.equipPerChess, 'it keeps 2 of the 4 returned items');
-  const kept = new Set(elite.items.map((it) => it.uid));
-  assert.ok([...kept].every((u) => its.some((it) => it.uid === u)), 'the kept items are returned ones');
-  assert.equal(its.filter((it) => !kept.has(it.uid) && ps.find(it.uid)).length, 0, 'the other two are nowhere (hand, temp, board)');
-  assert.equal(warns.filter((s) => /returned item .* destroyed \(no space\)/.test(s)).length, ids.length - m.gd.equipPerChess, 'the other two are destroyed with a log warning');
+  assert.deepEqual(elite.items, []);
+  for (const item of its) assert.equal(ps.find(item.uid).piece, item);
+  assert.equal(ps.temp.length, 9);
+  assert.deepEqual(warns, []);
   checkInvariants(m);
   m.dispose();
 });
@@ -466,7 +466,7 @@ test('audit.js passes transformations that complete a merge (突变细胞 ctx.tr
   }
 });
 
-test('a deployed copy on a tile its elite may not use (terrain changed, not re-checked yet) is skipped: hand, or the tile when nothing has room', () => {
+test('an elite skips illegal tiles after terrain changes: hand first, then the expandable temp queue', () => {
   for (const full of [false, true]) {
     const label = full ? 'hand and temp full' : 'room';
     const { m, ps } = prep({ seed: 54 });
@@ -488,9 +488,8 @@ test('a deployed copy on a tile its elite may not use (terrain changed, not re-c
     if (!full) {
       assert.equal(loc.area, 'hand', `${label}: the illegal tiles are skipped, the elite goes to the hand`);
     } else {
-      // never lost: it stays on the first deployed copy's tile, like a piece the eviction finds no room for
-      assert.equal(loc.area, 'board', `${label}: kept on the board`);
-      assert.equal(loc.key, mergeTile(tiles.map((key) => ({ key }))).key);
+      assert.equal(loc.area, 'temp', `${label}: retained without occupying an illegal tile`);
+      assert.equal(ps.temp.length, 6);
       assert.equal(elite.poolCopies, 3);
     }
     m.dispose();

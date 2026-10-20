@@ -6,36 +6,85 @@ import { pairPlayers, bossPoolHp, SharedBossPool, hiddenEligible } from '../../s
 import { GameData } from '../../server/match/gamedata.js';
 import { FakeBattle } from './fakeBattle.js';
 import { DATA, makeMatch, checkInvariants } from './harness.js';
+import { createRng } from '../../server/sim/rng.js';
 
 const bossFields = () => FakeBattle.instances.filter((b) => b.kind === 'boss' || b.kind === 'hidden');
 
-test('pairing by seat: (1,2), (3,4); an odd player alone', () => {
+test('pairing is seeded, independent of input order, includes everyone once and can draw every partner', () => {
   const p = (seat) => ({ seat, playerId: `s${seat}` });
-  assert.deepEqual(pairPlayers([p(0)]).map((g) => g.map((x) => x.seat)), [[0]]);
-  assert.deepEqual(pairPlayers([p(2), p(0)]).map((g) => g.map((x) => x.seat)), [[0, 2]]);
-  assert.deepEqual(pairPlayers([p(3), p(1), p(0)]).map((g) => g.map((x) => x.seat)), [[0, 1], [3]]);
-  assert.deepEqual(pairPlayers([p(3), p(1), p(0), p(2)]).map((g) => g.map((x) => x.seat)), [[0, 1], [2, 3]]);
+  const partners = new Set(), lone = new Set();
+  for (let seed = 1; seed <= 64; seed++) for (const n of [1, 2, 3, 4]) {
+    const alive = Array.from({ length: n }, (_, i) => p(i));
+    const groups = pairPlayers(alive, createRng(seed));
+    assert.deepEqual(groups, pairPlayers([...alive].reverse(), createRng(seed)));
+    assert.equal(groups.length, Math.ceil(n / 2));
+    assert.deepEqual(groups.flat().map(x => x.seat).sort(), alive.map(x => x.seat));
+    if (n === 4) partners.add(groups.find(g => g.some(x => x.seat === 0)).find(x => x.seat !== 0).seat);
+    if (n === 3) lone.add(groups.find(g => g.length === 1)[0].seat);
+  }
+  assert.deepEqual([...partners].sort(), [1, 2, 3]);
+  assert.deepEqual([...lone].sort(), [0, 1, 2]);
 });
 
-test('boss pool = bloodPoint[difficulty] in co-op whatever the alive count (× alive / 4 only with aliveScaling; solo × 0.25) × tuning; shared and never negative', () => {
-  // research numbers (data/tuning.json left out); DESIGN §20.10: notice 5114's "敌方领袖的总生命值不变" is about the
-  // mirrored copies, the one note on player count (巴哈姆特 12294 "聯機隊友(撤退/死掉)變少，最後boss血條也會變少") has no
-  // proportion — config bossHpScale.aliveScaling (off) would apply × alive / 4
+test('previous boss partners and sides persist; only orphaned survivors form a new pair', () => {
+  const all = [0, 1, 2, 3].map(seat => ({ seat, playerId: `s${seat}` }));
+  const previous = [['s3', 's0'], ['s2', 's1']];
+  const ids = groups => groups.map(g => g.map(p => p.playerId));
+  assert.deepEqual(ids(pairPlayers(all, createRng(99), previous)), previous);
+  assert.deepEqual(ids(pairPlayers(all.filter(p => p.seat !== 0), createRng(99), previous)), [['s2', 's1'], ['s3']]);
+  assert.deepEqual(ids(pairPlayers(all.filter(p => p.seat > 1), createRng(99), previous)), [['s3', 's2']]);
+});
+
+test('boss preview, actual fields and Hidden Core retain one per-match draw', () => {
+  const h = makeMatch({ mode: 'coop', difficulty: 'HARD', humans: 4, seed: 31, fake: true,
+    script: b => ['boss', 'hidden'].includes(b.kind) ? { bossDps: 1e9 } : {} }).start();
+  try {
+    h.drive(() => h.m.phase === PHASE.PREP && h.m.round === 14);
+    const pairs = structuredClone(h.m.bossPairs);
+    assert.deepEqual(h.m.bossWaves.map(w => w.players), pairs);
+    for (const p of h.m.order) {
+      p.bondCountBonus.yanShip = 3; p.layers.yanShip = 400; p.recompute();
+      const group = h.m.bossGroupOf(p);
+      assert.equal(group.side, pairs.find(g => g.includes(p.playerId)).indexOf(p.playerId) === 0 ? 'L' : 'R');
+    }
+    h.drive(() => h.m.phase === PHASE.FINAL_ASSAULT);
+    assert.deepEqual(h.m.fields.map(f => f.players), pairs);
+    h.drive(() => h.m.phase === PHASE.PREP && h.m.round === 15);
+    assert.deepEqual(h.m.bossWaves.map(w => w.players), pairs);
+    h.drive(() => h.m.phase === PHASE.HIDDEN_CORE);
+    assert.deepEqual(h.m.fields.map(f => f.players), pairs);
+  } finally { h.m.dispose(); }
+});
+
+test('boss pool = bloodPoint[difficulty] × the players alive at the fight\'s start (solo × 1) × tuning; config restores the fixed pool; shared and never negative', () => {
+  // DESIGN §25.13.4: the owner's decision of 2026-10-06 adopts PR #209 by @qingjingshenghuo (bloodPoint is one player's
+  // share) and replaces the fixed pool of 「保持固定血量」 — config bossHpScale (perPlayer false, solo 0.25) restores it.
+  // Research numbers (data/tuning.json left out).
   const { tuning, ...RAW } = DATA; // eslint-disable-line no-unused-vars
   const gd = new GameData(RAW, 'mode_multi_hard');
-  for (const n of [4, 3, 2, 1, undefined, 9]) assert.equal(bossPoolHp(gd, 'boss_1', n), 1800000, `${n} alive`);
+  for (const n of [1, 2, 3, 4]) assert.equal(bossPoolHp(gd, 'boss_1', n), 1800000 * n, `${n} alive`);
+  assert.equal(bossPoolHp(gd, 'boss_1'), 1800000 * 4, 'no count given: a full team');
+  assert.equal(bossPoolHp(gd, 'boss_1', 9), 1800000 * 4, 'at most aliveFull (4) players');
   assert.equal(gd.bossPoolHp('boss_1', 2), bossPoolHp(gd, 'boss_1', 2), 'GameData agrees');
-  // the flip: config bossHpScale.aliveScaling true scales the pool by alive / 4
-  const scaled = new GameData({ ...RAW, config: { ...RAW.config, bossHpScale: { ...RAW.config.bossHpScale, aliveScaling: true },
-    modes: { ...RAW.config.modes, mode_multi_hard: { ...RAW.config.modes.mode_multi_hard, bossHpScale: { ...RAW.config.modes.mode_multi_hard.bossHpScale, aliveScaling: true } } } } }, 'mode_multi_hard');
+  assert.equal(bossPoolHp(new GameData(RAW, 'mode_single_abyss'), 'boss_5', 1), 3000000, 'solo: the table value');
+  assert.equal(bossPoolHp(new GameData(RAW, 'mode_single_funny'), 'boss_2', 1), 225000);
+  // the flip back: the fixed pool of 0.1.x (perPlayer false; solo 0.25), and its optional × alive / 4 (aliveScaling)
+  const withScale = (over) => ({ ...RAW, config: { ...RAW.config, bossHpScale: { ...RAW.config.bossHpScale, ...over } } });
+  const fixed = withScale({ perPlayer: false, solo: 0.25 });
+  for (const n of [4, 3, 2, 1, undefined, 9]) assert.equal(bossPoolHp(new GameData(fixed, 'mode_multi_hard'), 'boss_1', n), 1800000, `fixed pool, ${n} alive`);
+  assert.equal(bossPoolHp(new GameData(fixed, 'mode_single_abyss'), 'boss_5', 1), 750000);
+  assert.equal(bossPoolHp(new GameData(fixed, 'mode_single_funny'), 'boss_2', 1), 56250);
+  const scaled = new GameData(withScale({ perPlayer: false, aliveScaling: true }), 'mode_multi_hard');
   assert.equal(bossPoolHp(scaled, 'boss_1', 4), 1800000);
   assert.equal(bossPoolHp(scaled, 'boss_1', 3), 1350000);
   assert.equal(bossPoolHp(scaled, 'boss_1', 2), 900000);
   assert.equal(bossPoolHp(scaled, 'boss_1', 1), 450000);
   assert.equal(bossPoolHp(scaled, 'boss_1'), 1800000, 'no count given: a full team');
   assert.equal(bossPoolHp(scaled, 'boss_1', 9), 1800000, 'never above the data value');
-  assert.equal(bossPoolHp(new GameData(RAW, 'mode_single_abyss'), 'boss_5', 1), 750000);
-  assert.equal(bossPoolHp(new GameData(RAW, 'mode_single_funny'), 'boss_2', 1), 56250);
+  // a mode's own entry overrides the global one
+  const perMode = { ...RAW, config: { ...RAW.config, modes: { ...RAW.config.modes, mode_multi_hard: { ...RAW.config.modes.mode_multi_hard, bossHpScale: { ...RAW.config.modes.mode_multi_hard.bossHpScale, perPlayer: false } } } } };
+  assert.equal(bossPoolHp(new GameData(perMode, 'mode_multi_hard'), 'boss_1', 3), 1800000, 'the mode entry first');
+  assert.equal(bossPoolHp(new GameData(perMode, 'mode_multi_abyss'), 'boss_1', 3), 3600000 * 3, 'other modes keep the global rule');
   // the balance layer multiplies the pool (docs/BALANCE.md)
   for (const modeId of ['mode_single_funny', 'mode_multi_hard']) {
     const tuned = new GameData(DATA, modeId);
@@ -67,8 +116,10 @@ for (const n of [1, 2, 3, 4]) {
     assert.equal(pool.maxHp, bossPoolHp(m.gd, m.bossId, n));
     for (const f of fields) {
       assert.deepEqual(f.opts.rect, GEO.BOSS_RECT);
+      assert.equal(f.opts.modeId, 'mode_multi_funny', '#475: an unpaired field retains multiplayer mode despite its solo wave template');
       assert.equal(f.opts.timeLimit, Infinity);
       assert.equal(f.opts.flags.layerGainsEnabled, false);
+      assert.deepEqual(f.opts.flags.enemyScale, m.gd.enemyScale(14), 'the round\'s enemy effects for the leader\'s summons (PR #272)');
       assert.ok(f.opts.players.every((p) => p.lpForBoss === m.teamLp));
       if (f.opts.players.length === 2) {
         assert.deepEqual(f.opts.players.map((p) => p.side), ['L', 'R']);
@@ -98,7 +149,7 @@ for (const n of [1, 2, 3, 4]) {
   });
 }
 
-test('overtime: −1 team LP per REAL second after 150 real s (300 game s at 2×); team LP 0 ends every field → defeat (13 rounds passed)', () => {
+test('all-human overtime: −1 team LP per REAL second after 120 real s (240 game s at 2×); team LP 0 ends every field → defeat (13 rounds passed)', () => {
   const h = makeMatch({ mode: 'coop', difficulty: 'FUNNY', humans: 2, seed: 50, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1 } : {}) }).start();
   const m = h.m;
   h.drive(() => m.phase === PHASE.PREP && m.round === 14);
@@ -109,7 +160,7 @@ test('overtime: −1 team LP per REAL second after 150 real s (300 game s at 2×
   const end = h.runToEnd();
   assert.equal(end.victory, false);
   assert.equal(end.roundsPassed, 13);
-  assert.ok(Math.abs(f.time - 340) < 2.5, `ended ≈ 300 + 2 × 20 game s (${f.time})`);
+  assert.ok(Math.abs(f.time - 280) < 2.5, `ended ≈ 240 + 2 × 20 game s (${f.time})`);
   assert.equal(m.teamLp, 0);
   m.dispose();
 });
@@ -163,7 +214,10 @@ test('Hidden Core is skipped at Σ layers ≤ threshold, on FUNNY, or with team 
   const gd = new GameData(DATA, 'mode_multi_normal');
   assert.equal(hiddenEligible(gd, { layerSum: 1200, teamLp: 50 }), false);
   assert.equal(hiddenEligible(gd, { layerSum: 1201, teamLp: 50 }), true);
+  // team LP > 1: PRTS and the community's measurement (路标月报#2, GitHub #645) — 1 LP left does not enter
   assert.equal(hiddenEligible(gd, { layerSum: 5000, teamLp: 1 }), false);
+  assert.equal(hiddenEligible(gd, { layerSum: 5000, teamLp: 2 }), true);
+  assert.equal(hiddenEligible(new GameData(DATA, 'mode_single_hard'), { layerSum: 351, teamLp: 1 }), false);
   assert.equal(hiddenEligible(new GameData(DATA, 'mode_single_hard'), { layerSum: 351, teamLp: 2 }), true);
   assert.equal(hiddenEligible(new GameData(DATA, 'mode_single_hard'), { layerSum: 350, teamLp: 2 }), false);
   assert.equal(hiddenEligible(new GameData(DATA, 'mode_multi_funny'), { layerSum: 9999, teamLp: 99 }), false);
@@ -188,22 +242,24 @@ test('Final Assault: a fighting player may only watch its own boss field; elimin
   h.drive(() => m.phase === PHASE.PREP && m.round === 14);
   h.ps('p_3').eliminate(13);
   h.drive(() => m.phase === PHASE.FINAL_ASSAULT);
-  assert.deepEqual(m.fields.map((f) => [f.fieldId, f.players]), [['b1', ['p_0', 'p_1']], ['b2', ['p_2']]]);
-  assert.equal(m.handle('p_0', { t: 'g.watch', fieldId: 'b2' }).error, 'BAD_TARGET', 'the other group is hidden');
-  assert.equal(m.handle('p_2', { t: 'g.watch', fieldId: 'b1' }).error, 'BAD_TARGET');
-  assert.deepEqual(m.handle('p_1', { t: 'g.watch', fieldId: 'b1' }), { ok: true });
+  const pair = m.fields.find(f => f.players.length === 2), lone = m.fields.find(f => f.players.length === 1);
+  assert.deepEqual(m.fields.flatMap(f => f.players).sort(), ['p_0', 'p_1', 'p_2']);
+  const [first, second] = pair.players, third = lone.players[0];
+  assert.equal(m.handle(first, { t: 'g.watch', fieldId: lone.fieldId }).error, 'BAD_TARGET', 'the other group is hidden');
+  assert.equal(m.handle(third, { t: 'g.watch', fieldId: pair.fieldId }).error, 'BAD_TARGET');
+  assert.deepEqual(m.handle(second, { t: 'g.watch', fieldId: pair.fieldId }), { ok: true });
   assert.deepEqual(m.handle('p_3', { t: 'g.watch', fieldId: 'b2' }), { ok: true }, 'an eliminated player spectates freely');
   assert.deepEqual(m.handle('p_3', { t: 'g.watch', fieldId: 'b1' }), { ok: true });
-  assert.equal(m.watchers.get('p_0'), 'b1', 'the refused watch keeps the default (own) field');
+  assert.equal(m.watchers.get(first), pair.fieldId, 'the refused watch keeps the default (own) field');
   // the prep-scouting id of a player of the other group is no way around the rule, and never detaches the viewer
-  const scouted = h.allTo('p_0', 'm.field').length;
-  assert.deepEqual(m.handle('p_0', { t: 'g.watch', fieldId: 'n:p_2' }), { error: 'BAD_TARGET', detail: 'no such field' });
-  assert.deepEqual(m.handle('p_0', { t: 'g.watch', fieldId: 'n:p_1' }), { error: 'BAD_TARGET', detail: 'no such field' });
-  assert.equal(h.allTo('p_0', 'm.field').length, scouted, 'no board of the other group was sent');
-  assert.equal(m.watchers.get('p_0'), 'b1', 'still streaming the own boss field');
-  const snaps = h.allTo('p_0', 'b.snap').length;
+  const scouted = h.allTo(first, 'm.field').length;
+  assert.deepEqual(m.handle(first, { t: 'g.watch', fieldId: `n:${third}` }), { error: 'BAD_TARGET', detail: 'no such field' });
+  assert.deepEqual(m.handle(first, { t: 'g.watch', fieldId: `n:${second}` }), { error: 'BAD_TARGET', detail: 'no such field' });
+  assert.equal(h.allTo(first, 'm.field').length, scouted, 'no board of the other group was sent');
+  assert.equal(m.watchers.get(first), pair.fieldId, 'still streaming the own boss field');
+  const snaps = h.allTo(first, 'b.snap').length;
   h.sched.advance(500);
-  assert.ok(h.allTo('p_0', 'b.snap').length > snaps, 'b.snap of b1 keeps coming');
+  assert.ok(h.allTo(first, 'b.snap').length > snaps, 'snapshots of the own field keep coming');
   m.dispose();
 });
 

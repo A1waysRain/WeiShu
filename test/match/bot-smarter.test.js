@@ -7,11 +7,138 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PHASE } from '../../shared/constants.js';
-import { botPickCard, bountyKillChance, itemTarget, arrange, botPrepBegin, botPrepEnd, bondPlan, rangeTiles, effDps, rangeRec } from '../../server/match/bot.js';
+import { botPickBand, botPickCard, bountyKillChance, itemTarget, arrange, botPrepBegin, botPrepEnd, bondPlan, rangeTiles, effDps, rangeRec, buyScoreOf } from '../../server/match/bot.js';
 import { parseKey, tileKey } from '../../server/match/board.js';
 import { makeMatch, checkInvariants, give, giveItem, legalTileFor, DATA } from './harness.js';
 
 const soloBot = (o = {}) => makeMatch({ mode: 'solo', difficulty: 'NORMAL', seats: [{ seat: 0, playerId: 'ai_0', name: 'AI', isBot: true, connected: true }], ...o });
+
+test('#514: a living teammate soft-reserves an opening bond, and elimination releases it', () => {
+  const { m } = makeMatch({ humans: 2, difficulty: 'HARD', seed: 11 }).start().toPrep();
+  const [human, bot] = m.order;
+  try {
+    bot.isBot = true;
+    human.bandId = null;
+    const chessOf = (bond) => Object.values(DATA.chess).find((c) => c.visible && !c.isGolden && c.tier <= 3
+      && Array.isArray(c.bonds) && c.bonds.includes(bond)
+      && c.bonds.filter((b) => m.gd.bond(b)?.isCore).length === 1);
+    const usable = m.gd.bondIds.filter((id) => m.gd.bond(id)?.isCore && !m.gd.modeInactiveBonds.has(id) && chessOf(id));
+    assert.ok(usable.length >= 2, 'two core bonds with a single-core chess');
+    const [a, b] = usable;
+    give(m, bot, chessOf(a).chessId, 'hand');
+    give(m, bot, chessOf(b).chessId, 'hand');
+    const focus = () => { bot._botFocus = null; bot._botFocusId = null; return bondPlan(m, bot).focus; };
+    const natural = focus();
+    assert.ok(natural === a || natural === b, natural);
+    const other = natural === a ? b : a;
+    let found = false;
+    for (let layers = 10; layers <= 60 && !found; layers += 10) {
+      bot.layers[other] = layers;
+      if (focus() === other) found = true;
+    }
+    assert.equal(focus(), other, 'one layer step is enough for the other bond to lead');
+    const band = m.gd.bandIds().find((id) => {
+      const bonds = m.gd.bandBondIds(id);
+      return bonds.includes(other) && !bonds.includes(natural);
+    });
+    assert.ok(band, `a strategy names ${other} and not ${natural}`);
+    human.bandId = band;
+    assert.notEqual(focus(), other, 'the opening strategy pulls focus off the reserved bond');
+    human.alive = false;
+    assert.equal(focus(), other, 'elimination ends the reservation');
+  } finally { m.dispose(); }
+});
+
+test('#514: strategy selection stays possible, and less likely, while a teammate holds that opening', () => {
+  const { m } = makeMatch({ humans: 2, difficulty: 'HARD', seed: 3 }).start().toPrep();
+  const [human, bot] = m.order;
+  try {
+    bot.isBot = true;
+    human.bandId = null;
+    const tally = (id, n = 400) => {
+      let hits = 0;
+      for (let i = 0; i < n; i++) if (botPickBand(m, bot) === id) hits++;
+      return hits;
+    };
+    const open = new Map();
+    for (let i = 0; i < 400; i++) {
+      const id = botPickBand(m, bot);
+      open.set(id, (open.get(id) || 0) + 1);
+    }
+    const ranked = [...open.entries()].filter(([id]) => m.gd.bandBondIds(id).length > 0).sort((x, y) => y[1] - x[1]);
+    const [band, base] = ranked[0];
+    assert.ok(base > 5, `${band} is drawn often enough to compare (${base})`);
+    human.bandId = band;
+    const reserved = tally(band);
+    assert.ok(reserved > 0, 'a soft reservation can still draw the strategy');
+    assert.ok(reserved < base, `reserved ${reserved} times, unreserved ${base}`);
+    human.alive = false;
+    const released = tally(band);
+    assert.ok(released > reserved, `elimination raises the rate from ${reserved} to ${released}`);
+  } finally { m.dispose(); }
+});
+
+test('user: Given a faction strategy teammate, When scoring shared high-tier chess, Then humans and bots receive the same preference even with full stock', () => {
+  const { m } = makeMatch({ humans: 3, seed: 11 }).start().toPrep();
+  const [ps, mate, other] = m.order;
+  try {
+    mate.bandId = other.bandId = null;
+    ps.shop.level = 6;
+    // 贾维 names 叙拉古; 铃兰 (V) and 荒芜拉普兰德 (VI) both belong to it.
+    for (const id of ['chess_char_5_10_a', 'chess_char_6_18_a']) {
+      mate.isBot = false;
+      const ordinary = buyScoreOf(m, ps, id);
+      mate.bandId = 'band_chiave';
+      const cooperative = buyScoreOf(m, ps, id);
+      assert.ok(cooperative < ordinary, `${m.gd.chess(id).name}: leave faction stock for the strategy`);
+      mate.isBot = true;
+      assert.equal(buyScoreOf(m, ps, id), cooperative, 'bot teammates count equally');
+      other.bandId = 'band_chiave';
+      assert.equal(buyScoreOf(m, ps, id), cooperative, 'multiple teammates do not multiply the penalty');
+      mate.alive = other.alive = false;
+      assert.equal(buyScoreOf(m, ps, id), ordinary, 'eliminated players no longer need cards');
+      mate.alive = other.alive = true;
+      other.bandId = null;
+      m.gd.modeInactiveBonds.add('siracusaShip');
+      const inactive = buyScoreOf(m, ps, id);
+      mate.bandId = null;
+      assert.equal(buyScoreOf(m, ps, id), inactive, 'inactive faction does not trigger yielding');
+      m.gd.modeInactiveBonds.delete('siracusaShip');
+    }
+    const unaffected = Object.values(DATA.chess).filter((c) => c.visible && !c.isGolden &&
+      (c.tier < 5 || !c.bonds.includes('siracusaShip')));
+    for (const c of unaffected) {
+      mate.bandId = null;
+      const ordinary = buyScoreOf(m, ps, c.chessId);
+      mate.bandId = 'band_chiave';
+      assert.equal(buyScoreOf(m, ps, c.chessId), ordinary, c.name);
+    }
+  } finally { m.dispose(); }
+});
+
+test('user: Given a teammate faction strategy, When buying or taking a reward, Then prefer an alternative but retain an immediate own merge', () => {
+  const yu = 'chess_char_6_03_a';
+  const nearl = 'chess_char_6_17_a';
+  for (const { reward = false, ownPair = false, band = 'band_duyaoy', expected } of [
+    { expected: nearl },
+    { reward: true, expected: nearl },
+    { ownPair: true, expected: yu },
+    { band: null, expected: yu },
+  ]) {
+    const { m } = makeMatch({ humans: 2, seed: 11 }).start().toPrep();
+    const [ps, mate] = m.order;
+    try {
+      mate.bandId = band;
+      if (ownPair) for (let i = 0; i < 2; i++) give(m, ps, yu, 'hand');
+      ps.shop.level = 6;
+      ps.funds = reward ? 0 : 5;
+      ps.shop.slots = reward ? [] : [yu, nearl].map((id) => ({ kind: 'chess', id, basePrice: 5, sold: false }));
+      if (reward) ps.pushRewardOffer('merge', { tier: 6, ids: [yu, nearl] });
+      botPrepBegin(m, ps);
+      assert.equal(reward ? ps.allChess()[0]?.id : ps.shop.slots.find((s) => s.sold)?.id, expected);
+    } finally { m.dispose(); }
+  }
+});
 
 /** A 悬赏决策 card as the draft builds it (choices.js buildCards), by its enemy's name. */
 function bountyCard(enemyName) {
@@ -38,7 +165,43 @@ test('bounty pick: the card the own board can beat, never one it cannot (even wh
   assert.equal(botPickCard(m, ps, [hard, easy, huge].map((c, idx) => ({ ...c, idx })), [0, 1, 2]), 1);
   ps.lp = 2;
   assert.equal(botPickCard(m, ps, [hard, huge, easy].map((c, idx) => ({ ...c, idx })), [0, 1, 2]), 2, 'low LP: still the beatable one');
+  const raw = [hard, easy].map((c) => DATA.choices.cards.bounty.find((x) => x.effectId === c.id));
+  assert.deepEqual(m.offerBountyChoice(ps, raw, 'chess_item_6_03_m'), { ok: true });
+  assert.deepEqual(m.autoPickPersonalChoice(ps, 'bot'), { ok: true });
+  assert.equal(ps.personalChoice, null);
+  assert.equal(ps.bounties.at(-1).card.enemyKey, easy.enemyKey, 'personal cards use bounty scoring too');
+  const metaState = m.rngMeta.state(), botState = m.rngBots.state();
+  m.autoPickPersonalChoice(ps, 'bot');
+  m.autoPickPersonalChoice(ps, 'random');
+  assert.equal(m.rngMeta.state(), metaState);
+  assert.equal(m.rngBots.state(), botState, 'nothing pending: no RNG draws');
   m.dispose();
+});
+
+test('a bot\'s 教鞭 pick is deterministic: one seed offers the same three cards and picks the same one, drawing only on the bots\' rng', () => {
+  const runs = [];
+  for (let k = 0; k < 2; k++) {
+    const h = soloBot({ seed: 5, difficulty: 'HARD' }).start();
+    const m = h.m;
+    const ps = m.order[0];
+    h.run(() => m.phase === PHASE.PREP && m.round === 1);
+    ps.lp = 999;
+    h.run(() => m.phase === PHASE.PREP && m.round === 5);
+    const art = giveItem(m, ps, 'chess_item_6_03_m');
+    assert.deepEqual(ps.useArt(art.uid, 10, 5), { ok: true });
+    const offered = ps.personalChoice.cards.map((c) => c.effectId);
+    assert.equal(offered.length, 3);
+    assert.equal(new Set(offered).size, 3, 'three different cards');
+    const meta = m.rngMeta.state(), bots = m.rngBots.state();
+    assert.deepEqual(m.autoPickPersonalChoice(ps, 'bot'), { ok: true });
+    assert.equal(m.rngMeta.state(), meta, 'the pick leaves the meta rng alone');
+    assert.notEqual(m.rngBots.state(), bots, 'one scoring draw per card from the bots\' rng');
+    assert.equal(ps.personalChoice, null);
+    runs.push({ offered, picked: ps.bounties.at(-1).card.effectId, bots: m.rngBots.state() });
+    assert.ok(offered.includes(runs[k].picked));
+    m.dispose();
+  }
+  assert.deepEqual(runs[0], runs[1]);
 });
 
 test('bounty pick in real drafts (绝境 R3 悬赏决策): a card the board likely beats (p ≥ 0.5) whenever a near-sure one (p ≥ 0.9) is offered', () => {
@@ -108,6 +271,15 @@ test('items: 信标 on a bench single; both 博士投影 on a normal operator ev
   // 拟态物质 (a third copy when two are owned): the pair
   const mimic = itemTarget(m, ps, giveItem(m, ps, 'chess_item_5_05_e_a'));
   assert.ok(mimic && [pairA.uid, pairB.uid].includes(mimic.uid), '拟态物质 on the pair');
+  // …but not once the pool has no third copy: the item would give nothing (GitHub #207)
+  m.pool.take(pairId, m.pool.left(pairId));
+  const mimic2 = itemTarget(m, ps, giveItem(m, ps, 'chess_item_5_05_e_a'));
+  assert.ok(mimic2 && ![pairA.uid, pairB.uid].includes(mimic2.uid), '拟态物质 not on a pair whose pool is out');
+  // 盟约之币 (the same on anyone): a full carrier would lose an item to it (the replace rule, GitHub #263) — every
+  // deployed operator wears two items here, so a bench operator with free slots takes it
+  for (const p of deployed()) while (p.items.length < m.gd.equipPerChess) p.items.push(ps.newPiece('item', 'chess_item_3_03_e_a'));
+  const coin = itemTarget(m, ps, giveItem(m, ps, 'chess_item_1_03_e_a'));
+  assert.ok(coin && [single.uid, pairA.uid, pairB.uid].includes(coin.uid), '盟约之币 on an operator with a free slot');
   m.dispose();
 });
 
@@ -129,9 +301,12 @@ test('bounty Arts (教鞭): kept after a battle with leaks, used after a perfect
     assert.ok(owns(ps, WHIP), 'kept after a battle with leaks (not destroyed)');
     h.run(() => m.phase === PHASE.PREP && m.round === 4);
     m.lastResults.set(ps.playerId, clean);
+    giveItem(m, ps, WHIP);
     const bounties = ps.bounties.length;
     h.run(() => m.phase === PHASE.COMBAT && m.round === 4);
-    assert.ok(!owns(ps, WHIP) && ps.bounties.length > bounties, 'used after a perfect battle');
+    assert.ok(!owns(ps, WHIP) && ps.bounties.length === bounties + 2, 'both Arts used and picked after a perfect battle');
+    assert.equal(ps.personalChoice, null);
+    assert.equal(ps.round.arts, 2);
     assert.equal(m.errorCount, 0);
     m.dispose();
   }
@@ -233,11 +408,15 @@ test('坎诺特 (利滚利: leftover funds are kept, +1 at ≥ 5): with a full b
     assert.ok(m.gd.leftoverKeptBands.includes(ps.bandId));
     ps.funds = 14;
     const merges = ps.stats.merges;
+    // the level-up on the curve is paid for first (its price depends on the rounds the run levelled at: 9 or 10 here);
+    // after it the bot buys / refreshes nothing that takes it under the 5 capital
+    const level0 = ps.shop.level, price0 = ps.shop.upgradePrice;
     h.run(() => m.phase === PHASE.COMBAT && m.round === 7);
-    // (a merge may spend the reserve; the level-up on the curve is paid for first and leaves enough here)
+    // (a merge may spend the reserve)
     if (ps.stats.merges === merges) {
       checked++;
-      assert.ok(ps.funds >= 5, `seed ${seed}: ${ps.funds} funds banked`);
+      const afterLevelUp = 14 - (ps.shop.level > level0 ? price0 : 0);
+      assert.ok(ps.funds >= Math.min(5, afterLevelUp), `seed ${seed}: ${ps.funds} funds banked (${afterLevelUp} after the level-up)`);
     }
     m.dispose();
   }
@@ -341,4 +520,110 @@ test('bench shed: the buy loop never sells a piece that came this prep (it used 
     }
   } finally { PlayerState.prototype.sell = oSell; }
   assert.deepEqual(shed, [], 'no piece of this prep sold by the shed');
+});
+
+test('user: Given a bond that counts the hand, When replacing a deployed member, Then count it only when there is room to withdraw it', () => {
+  for (const [deployed, crowded] of [[false, false], [true, false], [true, true]]) {
+    const { m } = makeMatch({ mode: 'coop', humans: 2, seed: 11 }).start().toPrep();
+    const ps = m.order[0];
+    try {
+      for (const p of ps.allChess()) ps.sell(p.uid);
+      const medic = 'chess_char_2_02_a';
+      const damage = 'chess_char_3_11_a';
+      const ids = [medic, 'chess_char_3_03_a', damage,
+        'chess_char_6_01_b', 'chess_char_6_02_b', 'chess_char_6_03_b', 'chess_char_6_04_b',
+        'chess_char_6_05_b', 'chess_char_6_06_b'];
+      if (crowded) ids.push('chess_char_6_07_b');
+      for (const [i, id] of ids.entries()) {
+        give(m, ps, id, deployed && i === 0 ? 'board' : 'hand', deployed && i === 0 ? legalTileFor(m, ps, id) : null);
+      }
+      ps.layers.visiShip = 120;
+      ps.recompute();
+      assert.equal(ps.bonds.visiShip.active, true);
+      arrange(m, ps);
+      assert.equal([...ps.board.values()].some((p) => p.id === damage), !crowded, 'replace the medic only when withdrawal preserves the bond');
+      assert.equal(ps.hand.some((p) => p?.id === medic), !crowded, 'the medic contributes from the hand when it fits');
+      assert.equal(ps.bonds.visiShip.active, true);
+      checkInvariants(m);
+    } finally { m.dispose(); }
+  }
+});
+
+test('user: Given a purchase that needs to withdraw a bond member, When the purchase consumes the last hand slot, Then do not count that member as retained', () => {
+  for (const occupied of [8, 9]) {
+    const { m } = makeMatch({ mode: 'coop', humans: 2, seed: 11 }).start().toPrep();
+    const ps = m.order[0];
+    try {
+      for (const p of ps.allChess()) ps.sell(p.uid);
+      const medic = 'chess_char_2_02_a';
+      const damage = 'chess_char_3_11_a';
+      give(m, ps, medic, 'board', legalTileFor(m, ps, medic));
+      for (const id of ['chess_char_3_03_a', 'chess_char_6_01_b', 'chess_char_6_02_b', 'chess_char_6_03_b', 'chess_char_6_04_b', 'chess_char_6_05_b', 'chess_char_6_06_b']) {
+        const p = give(m, ps, id, 'hand');
+        if (id === 'chess_char_3_03_a') p.items = [ps.newPiece('item', 'chess_item_1_01_e_a'), ps.newPiece('item', 'chess_item_1_02_e_a')];
+      }
+      while (ps.hand.filter(Boolean).length < occupied) giveItem(m, ps, 'chess_item_1_01_e_a');
+      ps.layers.visiShip = 120;
+      ps.shop.level = m.gd.maxShopLevel;
+      ps.shop.freeRefreshes = 0;
+      ps.funds = 3;
+      for (const slot of ps.shop.slots) if (slot) slot.sold = true;
+      ps.shop.slots[0] = { kind: 'chess', id: damage, basePrice: 3, sold: false };
+      ps.recompute();
+      botPrepBegin(m, ps);
+      assert.equal(ps.allChess().some((p) => p.id === damage), occupied === 8,
+        'buy the replacement only when a hand slot remains for the deployed bond member');
+      assert.equal(ps.bonds.visiShip.active, true);
+      checkInvariants(m);
+    } finally { m.dispose(); }
+  }
+});
+
+test('user: Given a full lineup with its last operator in a crowded hand, When preparing with no purchase available, Then keep and deploy that operator', () => {
+  const { m } = makeMatch({ mode: 'solo', seed: 11 }).start().toPrep();
+  const ps = m.order[0];
+  try {
+    for (const p of ps.allChess()) ps.sell(p.uid);
+    ps.shop.level = m.gd.maxShopLevel;
+    for (const slot of ps.shop.slots) if (slot) slot.sold = true;
+    ps.shop.freeRefreshes = 0;
+    ps.funds = 0;
+    const ids = ['1_01_a', '1_02_a', '1_03_a', '1_04_a', '1_06_a', '1_09_a', '1_12_a', '1_20_b'];
+    assert.equal(ps.deployCap, ids.length);
+    for (const id of ids.slice(0, -1)) {
+      const chess = `chess_char_${id}`;
+      give(m, ps, chess, 'board', legalTileFor(m, ps, chess));
+    }
+    const reserve = give(m, ps, `chess_char_${ids.at(-1)}`, 'hand');
+    reserve.boughtRound = 0;
+    for (let i = 0; i < m.gd.benchSize - 2; i++) giveItem(m, ps, i % 2 ? 'chess_item_1_01_e_a' : 'chess_item_1_02_e_a');
+    botPrepBegin(m, ps);
+    assert.ok([...ps.board.values()].some((p) => p.uid === reserve.uid), 'the available eighth operator is deployed, not sold to reserve a hand slot');
+    assert.equal(ps.allChess().length, ids.length);
+    checkInvariants(m);
+  } finally { m.dispose(); }
+});
+
+test('user: Given equally scored purchases, When buying with limited funds, Then prefer the cheaper offer without overriding a real score advantage', () => {
+  for (const expensive of ['chess_char_3_06_a', 'chess_char_3_05_a']) {
+    for (const reverse of [false, true]) {
+      const { m } = makeMatch({ mode: 'solo', seed: 11 }).start().toPrep();
+      const ps = m.order[0];
+      try {
+        for (const p of ps.allChess()) ps.sell(p.uid);
+        ps.shop.level = m.gd.maxShopLevel;
+        ps.shop.freeRefreshes = 0;
+        ps.funds = 3;
+        const cheap = 'chess_char_1_12_a';
+        const offers = [{ kind: 'chess', id: expensive, basePrice: 3, sold: false }, { kind: 'chess', id: cheap, basePrice: 2, sold: false }];
+        if (reverse) offers.reverse();
+        for (const slot of ps.shop.slots) if (slot) slot.sold = true;
+        ps.shop.slots.splice(0, 2, ...offers);
+        botPrepBegin(m, ps);
+        const expected = expensive === 'chess_char_3_06_a' ? cheap : expensive;
+        assert.deepEqual(ps.allChess().map((p) => p.id), [expected]);
+        checkInvariants(m);
+      } finally { m.dispose(); }
+    }
+  }
 });

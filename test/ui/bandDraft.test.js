@@ -1,5 +1,9 @@
-// Shared strategies: manual, AI and automatic picks may repeat. Teammate markers remain informational.
-// Timeout uses the highlighted allowed strategy, or the official default 「华法琳」.
+// Strategy draft 队友已选 (research 09 §5 / §7, DESIGN §14 corrections): a strategy a teammate already picked cannot be
+// chosen again — the server refuses it (server/match/match/phases.js pickBand → BAD_TARGET '队友已选'), bots re-draw, and the
+// UI marks it (screens/bandDraft.js teammateBands). Automatic assignments (a turn that runs out, a departing seat) give
+// the official default 「华法琳」 only while no teammate holds it, else the first free strategy (match/phases.js defaultBand; the
+// UI names it: bandDraft.js timeoutBand) — a timed-out turn takes the highlighted band first (g.bandFocus, match/phases.js
+// timeoutBand; user playtest #4 item 4: one countdown, BAND_TURN_SECONDS per turn, no separate step cap).
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,8 +22,48 @@ function draftOf(o) {
   return h;
 }
 
-describe('server: repeated strategies in the co-op draft', () => {
-  test('teammates can choose the same strategy while each player only picks once', () => {
+describe('server: skip requires a successor and remaining quota', () => {
+  for (const humans of [2, 3, 4]) test(`${humans} humans: the final unpicked player cannot pass to a finished player`, () => {
+    const h = draftOf({ humans, seed: 5 });
+    const m = h.m;
+    try {
+      const order = m.draft.order.slice();
+      for (let i = 0; i < order.length - 1; i++) {
+        const pid = order[i];
+        assert.equal(m.draftTurn(), pid);
+        assert.deepEqual(m.handle(pid, { t: 'g.band', bandId: m.defaultBand(pid) }), { ok: true });
+      }
+      const last = order.at(-1);
+      assert.equal(m.draftTurn(), last);
+      assert.equal(m.publicView().draft.order.length, humans, 'the published order retains finished players');
+      assert.equal(m.draft.skipsLeft[last], 1);
+      assert.deepEqual(m.handle(last, { t: 'g.bandSkip' }), { error: ERR.BAD_TARGET, detail: 'nobody to pass to' });
+      assert.equal(m.draftTurn(), last);
+      assert.equal(m.draft.skipsLeft[last], 1, 'a refused skip consumes no quota');
+      assert.deepEqual(m.handle(last, { t: 'g.band', bandId: m.defaultBand(last) }), { ok: true });
+    } finally { m.dispose(); }
+  });
+
+  test('passing works before the final position, but a spent quota cannot be used again', () => {
+    const h = draftOf({ humans: 3, seed: 5 });
+    const m = h.m;
+    try {
+      const [first, second, third] = m.draft.order;
+      assert.deepEqual(m.handle(first, { t: 'g.bandSkip' }), { ok: true });
+      assert.equal(m.draftTurn(), second);
+      assert.deepEqual(m.handle(second, { t: 'g.bandSkip' }), { ok: true });
+      assert.equal(m.draftTurn(), third);
+      assert.deepEqual(m.handle(third, { t: 'g.band', bandId: m.defaultBand(third) }), { ok: true });
+      assert.equal(m.draftTurn(), first);
+      assert.equal(m.draft.order.length - m.draft.idx, 2);
+      assert.deepEqual(m.handle(first, { t: 'g.bandSkip' }), { error: ERR.ALREADY, detail: 'no skip left' });
+      assert.equal(m.draftTurn(), first);
+    } finally { m.dispose(); }
+  });
+});
+
+describe('server: no duplicate strategies in the co-op draft', () => {
+  test('a band picked by a teammate is refused with 队友已选; a free one is accepted', () => {
     const h = draftOf({ humans: 3, seed: 5 });
     const m = h.m;
     const [first, second, third] = m.draft.order;
@@ -177,7 +221,7 @@ describe('server: automatic assignments allow repeated strategies', () => {
   test('every human idle: all turn timeouts assign 华法琳 (no separate step cap)', () => {
     const h = draftOf({ humans: 4, seed: 9 });
     const m = h.m;
-    h.run(() => m.phase !== PHASE.BAND_DRAFT, { maxTime: 120000 });
+    h.run(() => m.phase !== PHASE.BAND_DRAFT, { maxTime: 4 * TURN_MS + 1 });
     assert.equal(m.phase, PHASE.BATTLE_CHECK);
     const ids = validPicks(m);
     assert.deepEqual(ids, Array(4).fill('band_bldsk'));
@@ -207,8 +251,8 @@ describe('server: automatic assignments allow repeated strategies', () => {
     m.dispose();
     for (const seed of [1, 2, 3, 4]) {
       const h2 = draftOf({ humans: 2, bots: 2, seed });
-      h2.run(() => h2.m.phase !== PHASE.BAND_DRAFT, { maxTime: 120000 });
-      validPicks(h2.m);
+      h2.run(() => h2.m.phase !== PHASE.BAND_DRAFT, { maxTime: 4 * TURN_MS + 1 });
+      assert.ok(Object.values(h2.m.draft.picks).every((id) => DATA.bands[id]));
       h2.m.dispose();
     }
   });

@@ -6,7 +6,8 @@ export const TILE_H = Object.freeze({
   forbid: 0.3,     // '#' forbidden block (data: HIGH)
   sep: 0.55,       // 'X' hard separator wall (rows 6 / 13)
   bench: 0.16,     // 'a' / 'A' hand & temp slots (data: HIGH)
-  platform: 0.26,  // active 射击台 / mound devices
+  platform: 0.465, // active 射击台: the top of the official model (trap_1106_achplat, 46.5 cm; round 40)
+  mound: 0.26,     // active mound devices
 });
 
 /** Stage glyph → material + height class (data/stages.json legend, DATA.md §12). */
@@ -60,9 +61,17 @@ export const COLORS = Object.freeze({
   hpBoss: 0xff2d55,
   hpGhost: 0xfff0c8,
   hpBack: 0x0c0f0e,
+  // the red bar of a negative-HP pool (斩业星熊's 我执, b.snap `neg`) — the same red as an enemy's HP
+  hpNeg: 0xff4b3e,
   sp: 0x6fd3ff,
   spReady: 0xffe066,
   spActive: 0xffb347,
+  // the ammo bar's yellow cells (b.snap `ammo`) and 伺夜's 狼影 pips (b.snap `wolves`)
+  ammo: 0xffd04a,
+  wolf: 0xe8f0ff,
+  // 秘术师's stored attack energies (b.snap `energy`): a violet no other HUD state uses — the purse's gold coin and its
+  // count are told apart from the orb and its count at a glance
+  energy: 0xb07dff,
   shield: 0xdfe8ff,
 });
 
@@ -70,12 +79,46 @@ export const COLORS = Object.freeze({
 export const TIER_COLORS = Object.freeze([0x9aa5a0, 0x9aa5a0, 0x7fd37a, 0x52b6ff, 0xb98cff, 0xffc600, 0xff6b3d]);
 export const ENEMY_FRAME = Object.freeze({ normal: 0xc84a3c, elite: 0xff7a33, boss: 0xff2d55 });
 
+/**
+ * 活性源石 (infection) — the ONE palette of that tile, shared by the two boards (GitHub #184: the 2D atlas cell and the
+ * 3D shader used to be two different materials — a beveled brick with crystal clusters against a world-space crust).
+ * The values are the 3D board's own working colours (`render/board3d/materials.js` writes them into its shaders, which
+ * end in `#include <colorspace_fragment>`, i.e. they are LINEAR); `textures.js` converts them for its canvas with
+ * `linearToHex`, so both renderers show the same colour.
+ *   base — the crust's dark side, crust — its lit side, vein — the glowing veins, spec — the bright crystal grains.
+ */
+export const ORIGINIUM = Object.freeze({
+  base: Object.freeze([0.16, 0.05, 0.05]),
+  crust: Object.freeze([0.3, 0.1, 0.07]),
+  vein: Object.freeze([1.0, 0.46, 0.18]),
+  spec: Object.freeze([1.0, 0.78, 0.52]),
+  glow: 0xff6a3d,        // the additive pulse the 2D board tints per tile
+});
+
+/**
+ * One channel of a working (linear) colour as the 0–255 sRGB value a canvas stores — the shaders' `#include
+ * <colorspace_fragment>` does this for the 3D board, the canvas has to do it itself.
+ */
+export function linearToSrgb255(v) {
+  const k = Number(v);
+  const s = k <= 0.0031308 ? k * 12.92 : 1.055 * Math.pow(Math.max(0, k), 1 / 2.4) - 0.055;
+  return Math.max(0, Math.min(255, Math.round(s * 255)));
+}
+
+/** A working (linear) `ORIGINIUM` colour as the `#rrggbb` sRGB string of the canvas (`textures.js originiumCanvas`). */
+export function linearToHex(rgb) {
+  return `#${rgb.map((v) => linearToSrgb255(v).toString(16).padStart(2, '0')).join('')}`;
+}
+
 export const DMG_STYLE = Object.freeze({
   phys: { font: 'sp-dmg-phys', fill: ['#fffbe8', '#ffb35c'], stroke: '#3b1400' },
   arts: { font: 'sp-dmg-arts', fill: ['#fbe8ff', '#c77dff'], stroke: '#2a0b45' },
   true: { font: 'sp-dmg-true', fill: ['#ffffff', '#e8e8e8'], stroke: '#2a2a2a' },
   heal: { font: 'sp-dmg-heal', fill: ['#eafff0', '#62f08a'], stroke: '#07361a' },
   elem: { font: 'sp-dmg-elem', fill: ['#fff4e0', '#ff7b3a'], stroke: '#3a1000' },
+  // Official red integer and yellow MISS (PRTS 作战机制 「伤害红字（暴击）」, MISS #ff9000). Default numbers never use these.
+  crit: { font: 'sp-dmg-crit', fill: ['#ffd0d0', '#ff2a2a'], stroke: '#4a0000' },
+  miss: { font: 'sp-dmg-miss', fill: ['#ffe0a8', '#ff9000'], stroke: '#4a2400' },
 });
 
 /** Map b.ev dmg types to a style key. */
@@ -113,7 +156,7 @@ export const PROJ = Object.freeze({
   drone: { look: 'dart', speed: 16, tint: 0xe4fbff, glow: 0x57c9ff, len: 0.7, width: 0.16, head: 0.3, trail: 0x57c9ff, hit: 'zap' },
   enemy: { look: 'orb', speed: 10, tint: 0xffe2da, glow: 0xff3b30, len: 0.55, width: 0.28, head: 0.44, trail: 0xff4a3a, muzzle: 0xff6a5a, hit: 'enemy' },
   boomerang: { look: 'boomerang', speed: 15, back: 3.75, tint: 0xfff4d6, glow: 0x9ff0dc, len: 0.4, width: 0.3, head: 0.5, trail: 0x9ff0dc, hit: 'spark' },
-  // 暴鸰's bomb (sim content/enemies.js kitBombd; official projectile_bombd, speed 5): dropped from the drone, it falls
+  // 暴鸰's bomb (sim content/enemies/fly.js kitBombd; official projectile_bombd, speed 5): dropped from the drone, it falls
   // onto its target with a low arc and bursts where the sim's 'explode' blast goes off
   droneBomb: { look: 'shell', speed: 5, once: true, tint: 0xffe2c8, glow: 0xff5a3a, len: 0.6, width: 0.3, head: 0.5, trail: 0xff7a4a, arc: 0.35, smoke: 0x2e2824, hit: 'boom' },
 });
@@ -122,7 +165,7 @@ export const PROJ = Object.freeze({
 export const STATUS_ICON = Object.freeze({
   stun: 'stun', freeze: 'freeze', cold: 'cold', stealth: 'stealth', shield: 'shield', fragile: 'fragile',
   artsFragile: 'fragile', physFragile: 'fragile', elemFragile: 'fragile', sleep: 'sleep', invulnerable: 'invuln',
-  silence: 'silence', slow: 'slow', sluggish: 'slow', bind: 'bind', fear: 'fear', tremble: 'fear', weaken: 'weaken',
+  silence: 'silence', slow: 'slow', sluggish: 'slow', bind: 'bind', groundbind: 'bind', fear: 'fear', tremble: 'fear', weaken: 'weaken',
   levitate: 'levitate', taunt: 'taunt', defDown: 'weaken', resDown: 'weaken', aspdDown: 'slow', disarm: 'silence',
   burn: 'burn', burnBurst: 'burn', neural: 'neural', neuralBurst: 'neural', necrosis: 'necrosis', apoptosis: 'necrosis',
   // a 傀儡师 fighting as its <替身> (sim professions.js buff 'trait:substitute', the 20 s form)
@@ -143,7 +186,7 @@ const STATUS_GUESS = [
 ];
 
 /**
- * The 折射 icon is not drawn while the unit is silenced: the RES bonus is already off (enemies.js refraction)
+ * The 折射 icon is not drawn while the unit is silenced: the RES bonus is already off (sim content/enemies/archetypes.js refraction)
  * and the status must not keep looking active. Other icons stay.
  * @param {string} key a b.ev status key
  * @param {Set<string>|string[]|null} statuses

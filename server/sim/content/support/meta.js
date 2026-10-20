@@ -6,7 +6,7 @@
 //       handUnits  pieces in the 整备区 (hand, 10 slots; operators, items and summon stacks),
 //       handChess  operators in the hand,
 //       roundStats { refreshes, buys, sells, spent, gainedChess, arts }   (this round's prep, ps.round),
-//       matchBands band ids of every alive player (this player first),
+//       matchBands band ids of every alive player (this player first), plus a retained Touch team grant,
 //       teammates  [{ playerId, bandId }] of the other alive players }
 // Global handlers run first in every dispatch, so band / bond / garrison / item handlers of the same onBattleStart can
 // read or extend `ev.input.contentInfo`.
@@ -26,6 +26,10 @@ export function registerSupportMeta(registry) {
       const hand = ctx.hand();
       const rs = ctx.roundStats();
       const mates = ctx.teammates();
+      const matchBands = [ctx.bandId(), ...mates.map(t => t.bandId())].filter(Boolean);
+      // [ASSUMED] 外勤医疗 is a team grant for this match, not an aura revoked when its holder is eliminated.
+      // Other team strategies and the teammate contexts still require a living player.
+      if (ctx.teamMedicGranted?.() && !matchBands.includes('band_amedic')) matchBands.push('band_amedic');
       ev.input.contentInfo = {
         round: ctx.round,
         kind: ev.kind ?? null,
@@ -37,7 +41,7 @@ export function registerSupportMeta(registry) {
           refreshes: rs.refreshes | 0, buys: rs.buys | 0, sells: rs.sells | 0, spent: rs.spent | 0,
           gainedChess: rs.gainedChess | 0, arts: rs.arts | 0,
         },
-        matchBands: [ctx.bandId(), ...mates.map((t) => t.bandId())].filter(Boolean),
+        matchBands,
         teammates: mates.map((t) => ({ playerId: t.playerId, bandId: t.bandId() })),
       };
     },
@@ -47,6 +51,8 @@ export function registerSupportMeta(registry) {
 /** Bonds of a piece view (own + 变形同构体 grants), as the match counts them. */
 export function metaBonds(ctx, piece) {
   if (!piece || piece.kind !== 'chess') return [];
+  // The live match owns the rule selection; this also handles the source of a removal/merge event.
+  if (Number.isInteger(piece.uid) && piece.uid > 0 && typeof ctx.pieceBonds === 'function') return ctx.pieceBonds(piece.uid, piece);
   const fresh = Number.isInteger(piece.uid) && piece.uid > 0 ? ctx.piece(piece.uid) : null;
   const p = fresh && fresh.kind === 'chess' ? fresh : piece;
   const rec = ctx.chessRecord(p.id);

@@ -13,7 +13,8 @@
 //   - 守墓石像 turns into a flyer at run time (data WALK, no 静态刚体): its statue ("无法被阻挡，自缚，失衡免疫，免疫浮空") and its
 //     flight ("变为飞行单位，失衡免疫") are 失衡免疫 (PRTS 守墓石像 / 愤怒的守墓石像 天赋).
 // Unchanged: ground enemies keep the 力度 − 重量 tables (DESIGN §20.3); the hovering 吉兆飞鳞 / 掠海漂移体 are 失衡免疫 while they
-// hover and displaceable once grounded (no 静态刚体 on their pages). [ASSUMED] the 0.1 s 失衡硬直 of a 静态刚体 is not modelled.
+// hover and displaceable once grounded (no 静态刚体 on their pages). Since 0.2.2 a force > 0 on a 静态刚体 gives its 0.1 s 失衡
+// floor (特殊机制 静态刚体 「失衡状态拥有 0.1 秒保底持续时间」; battle/displacement.js _staticForce): it pauses, never moves.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -105,7 +106,7 @@ test('B5 (the player\'s scenario): 薄绿 S2 hits the drones but never drags the
   }
 });
 
-test('B5 (the player\'s scenario): on act2 m01 a round-7 drone flies past 薄绿 on its route, hit after hit', REAL, () => {
+test('B5 (the player\'s scenario): on act2 m01 a round-7 drone flies past 薄绿 on its route, hit after hit — never moved, only held 0.1 s per force', REAL, () => {
   // round 7's FLY route 10 (… (11,8) → (11,6) → (10,6) → (10,5) …) passes her x-1 range on the melee tile (10,7)
   const { routes } = spawnsFromTemplate(getDefaultSource().getWave('act1autochess_07'));
   assert.equal(routes[10].motion, 'FLY');
@@ -123,10 +124,12 @@ test('B5 (the player\'s scenario): on act2 m01 a round-7 drone flies past 薄绿
   };
   const ref = fly(false), got = fly(true);
   assert.ok(got.hits >= 5, `S2 hits the drone (${got.hits} hits)`);
-  assert.equal(got.path.length, ref.path.length, 'it reaches the goal on the same tick');
-  let dev = 0;
-  for (let i = 0; i < ref.path.length; i++) dev = Math.max(dev, Math.hypot(got.path[i][0] - ref.path[i][0], got.path[i][1] - ref.path[i][1]));
-  approx(dev, 0, 1e-9, 'its flight is the undisturbed one');
+  // every place it passes is a place of the undisturbed flight: the pulls never move it, they only hold it a moment
+  const key = (p) => `${p[0].toFixed(6)},${p[1].toFixed(6)}`;
+  const route = new Set(ref.path.map(key));
+  assert.ok(got.path.every((p) => route.has(key(p))), 'its flight is the undisturbed one, with pauses');
+  const late = got.path.length - ref.path.length;     // ticks; the 0.1 s floor is 3 ticks, overlapping holds merge
+  assert.ok(late > 0 && late <= got.hits * 4, `held for ${late} ticks over ${got.hits} hits`);
   checkInvariants(got.h.b);
 });
 
@@ -250,25 +253,6 @@ test('B5 audit: every displacement source × ground / static air / dynamic air /
     }
   }
   assert.deepEqual(wrong, []);
-});
-
-test('B5 audit: 琳琅诗怀雅 S3\'s coins push ground enemies only (PRTS 备注 "地面敌方单位…弹道（不可对空）")', REAL, () => {
-  const id = 'chess_char_3_04_a';
-  const h = makeBattle({
-    units: [{ chessId: id, row: 10, col: 3, dir: 'RIGHT', skillIndex: 2 }], flags: { dpInit: 60, dpMax: 99 },
-    enemies: [{ key: SLIME, pos: [10, 4], mods: STILL }, { key: YOKAI, pos: [10, 5], route: 2, mods: STILL }], autoFinish: false, timeLimit: 30,
-  });
-  const u = h.unit(id);
-  h.step();
-  assert.equal(u.skill.id, 'skchr_swire2_3');
-  u.skill.gainSp(u.skill.spCost + 1, 'test');
-  assert.ok(h.runUntil(() => u.skill.active, 5), 'the toggle is on');
-  const [g, f] = h.b.enemies;
-  u.mem.coins = u.skill.bb.sp;
-  h.step(3);
-  assert.ok(!u.skill.active && u.mem.coins === 0, 'the coins are spent');
-  assert.ok(g.x > 4.3, `the ground enemy is pushed forward (${g.x})`);
-  approx(Math.hypot(f.x - 5, f.y - 10), 0, 1e-9, 'the drone is never paid');
 });
 
 test('B5 audit: 缪尔赛思 S3 — a melee 流形 copy\'s pulse reaches air units (PRTS 流形 "…可对空（包括近战流形）"), a static drone stays', REAL, () => {

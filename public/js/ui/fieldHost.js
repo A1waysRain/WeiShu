@@ -12,14 +12,16 @@ import { useEffect, useRef, useState } from '../../vendor/hooks.module.js';
 import { createFallbackView } from './fallbackField.js';
 import { data } from '../data.js';
 import { audio } from '../audio.js';
+import { store } from '../store.js';
 import { settingsStore } from './settings.js';
 
 const LOAD_TIMEOUT_MS = 12000;
 const METHODS = ['setStage', 'setCamera', 'setPrep', 'enterBattle', 'pushSnapshot', 'pushEvents', 'highlightTiles', 'on', 'resize', 'destroy'];
 // direction-step hooks (ui/facingWheel.js): optional — the wheel falls back to the engine's dev hooks when absent;
 // setPen (enemy preview pen list), prepField ({ kind, side, mirror } of the Final Assault prep), stripesUnder (the view
-// stripes range previews under the units itself) — render/app.js; the DOM fallback lacks them (→ null)
-const OPTIONAL = ['pieceScreenRect', 'setSettings', 'off', 'tileScreen', 'holdPiece', 'setPieceDir', 'setPen', 'prepField', 'stripesUnder'];
+// stripes range previews under the units itself), replayDeploys (the round start's Start-clip replay, PR #416) —
+// render/app.js; the DOM fallback lacks them (→ null)
+const OPTIONAL = ['pieceScreenRect', 'pieceAtClientPoint', 'setSettings', 'setMe', 'setSkins', 'off', 'tileScreen', 'holdPiece', 'setPieceDir', 'setPen', 'prepField', 'stripesUnder', 'replayDeploys'];
 
 /**
  * Camera padding (px) that keeps the field clear of the DOM HUD (top bar + bond strip, team panel, shop bar /
@@ -87,12 +89,14 @@ export function hudBands(kind, size, opts) {
   let corner = 0;
   try {
     rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 100;
+    // 异形屏适配 (ui/screenFit.js): the board's host may not start at the viewport's top — the HUD rects are measured from it
+    const oy = document.querySelector('.gm__field')?.getBoundingClientRect()?.top || 0;
     // the HUD layer starts below the top safe-area inset and ends above the bottom one (css/devices.css .gm__hud)
     const hud = document.querySelector('.gm__hud')?.getBoundingClientRect();
-    safeTop = Math.max(0, hud?.top || 0);
+    safeTop = Math.max(0, (hud?.top || 0) - oy);
     if (folded) {
-      if (hud && hud.bottom > 0) safeBottom = Math.max(0, h - hud.bottom);
-      corner = cornerBand(h);
+      if (hud && hud.bottom - oy > 0) safeBottom = Math.max(0, h - (hud.bottom - oy));
+      corner = cornerBand(h, oy);
     }
   } catch { /* ignore */ }
   const bottom = folded
@@ -110,8 +114,9 @@ export function hudBands(kind, size, opts) {
  * of at least --tap-min (44 px) centred on it (css/devices.css touch targets), 5 px above a 34 px phone button — a bench
  * pad edge there is not pressable.
  * @param {number} h
+ * @param {number} [oy] the board host's top in client px (异形屏适配 moves it down)
  */
-function cornerBand(h) {
+function cornerBand(h, oy = 0) {
   const btns = document.querySelectorAll('.gm__corner .gm__gear, .gm__corner .ewheel__btn');
   if (!btns || !btns.length) return 0;
   const root = document.documentElement;
@@ -121,7 +126,7 @@ function cornerBand(h) {
     const r = b.getBoundingClientRect();
     if (r && r.height > 0) top = Math.min(top, r.top + r.height / 2 - Math.max(r.height, tap) / 2);
   }
-  return top < Infinity ? Math.max(0, h - top) : 0;
+  return top < Infinity ? Math.max(0, h - (top - oy)) : 0;
 }
 
 function renderPref() {
@@ -132,8 +137,32 @@ function renderPref() {
   return globalThis.__SP_RENDER__ === 'fallback' ? 'fallback' : 'auto';
 }
 
-function withTimeout(p, ms, what) {
-  return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out`)), ms))]);
+function abortError(signal) {
+  return signal?.reason ?? new DOMException('Field view initialization cancelled', 'AbortError');
+}
+
+function checkActive(signal) {
+  if (signal?.aborted) throw abortError(signal);
+}
+
+function withTimeout(p, ms, what, signal) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer;
+    const finish = (done, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      done(value);
+    };
+    const onAbort = () => finish(reject, abortError(signal));
+    signal?.addEventListener('abort', onAbort, { once: true });
+    timer = setTimeout(() => finish(reject, new Error(`${what} timed out`)), ms);
+    // Keep a rejection handler attached even when cancellation wins before this promise settles.
+    Promise.resolve(p).then((value) => finish(resolve, value), (err) => finish(reject, err));
+    if (signal?.aborted) onAbort();
+  });
 }
 
 /**
@@ -167,14 +196,16 @@ export function guardView(view, kind) {
  * screen waits for them, gameComponents GAME_FILES) to the asset store, now or when they land: it then never downloads
  * the manifest a second time — after a page reload (a phone browser discarding a background tab, Chrome's Memory Saver)
  * that second download was the one createFieldView waited ≤ 4 s for, and a slow or failed one left every operator the
- * image-less placeholder (public issue #8 item 5). Without a copy the store fetches and retries by itself.
+ * image-less placeholder (public issue #8 item 5). Without a copy the store fetches and retries by itself. The copy as
+ * downloaded (data.getRaw): the store lays the cosmetic plugins over it itself (assets.js `cosmetics`), data.js's view
+ * of `assets` already has them.
  * @param {{ seed?: (m: any) => boolean, seedLocal?: (m: any) => boolean }} store public/js/assets.js store
  */
 export function seedAssets(store) {
   if (!store) return;
   const give = (name, fn) => {
     if (typeof fn !== 'function') return;
-    const now = data.get(name);
+    const now = data.getRaw(name);
     if (now) { fn(now); return; }
     // still loading (or failed): adopt it if it lands; a later success of the store's own fetch makes this a no-op
     Promise.resolve(data.load(name)).then((m) => { if (m) fn(m); }, () => {});
@@ -186,34 +217,55 @@ export function seedAssets(store) {
 /**
  * Create a field view in `host`: the render engine when available, else the DOM fallback.
  * @param {HTMLElement} host
+ * @param {{ signal?: AbortSignal }} [options] Cancels a pending mount without creating a fallback.
  * @returns {Promise<ReturnType<typeof guardView>>}
  */
-export async function mountFieldView(host) {
+export async function mountFieldView(host, { signal } = {}) {
+  checkActive(signal);
   const pref = renderPref();
   const opts = { data, assets: data.get('assets'), audio, settings: settingsStore.get(), padding: hudPadding, hud: hudBands };
   if (pref !== 'fallback') {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(abortError(signal));
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    let engineView = null;
+    const dispose = (view) => { try { view?.destroy?.(); } catch { /* ignore */ } };
     try {
+      checkActive(controller.signal);
       // the shared asset store (public/js/assets.js) keeps its Spine cache across remounts (next match, reconnect)
-      const am = await withTimeout(import('../assets.js'), LOAD_TIMEOUT_MS, 'asset store import').catch(() => null);
+      const am = await withTimeout(import('../assets.js'), LOAD_TIMEOUT_MS, 'asset store import', controller.signal).catch(() => {
+        checkActive(controller.signal);
+        return null;
+      });
+      checkActive(controller.signal);
       if (am?.assets && typeof am.assets.ready === 'function') {
         opts.assets = am.assets;
         seedAssets(am.assets);
       }
-      const mod = await withTimeout(import('../render/app.js'), LOAD_TIMEOUT_MS, 'render engine import');
+      const mod = await withTimeout(import('../render/app.js'), LOAD_TIMEOUT_MS, 'render engine import', controller.signal);
+      checkActive(controller.signal);
       if (typeof mod?.createFieldView !== 'function') throw new Error('createFieldView missing');
-      const view = await withTimeout(Promise.resolve(mod.createFieldView(host, opts)), LOAD_TIMEOUT_MS, 'createFieldView');
+      // A factory that ignores cancellation still belongs to this attempt when it eventually returns.
+      const pending = Promise.resolve(mod.createFieldView(host, { ...opts, signal: controller.signal })).then((view) => {
+        if (controller.signal.aborted) dispose(view); else engineView = view;
+        return view;
+      });
+      const view = await withTimeout(pending, LOAD_TIMEOUT_MS, 'createFieldView', controller.signal);
+      checkActive(controller.signal);
       const missing = METHODS.filter((k) => typeof view?.[k] !== 'function');
-      if (missing.length) {
-        try { view?.destroy?.(); } catch { /* ignore */ }
-        throw new Error(`view lacks ${missing.join(', ')}`);
-      }
+      if (missing.length) throw new Error(`view lacks ${missing.join(', ')}`);
       return guardView(view, 'engine');
     } catch (err) {
+      controller.abort();
+      dispose(engineView);
+      checkActive(signal);
       console.warn('[field] render engine unavailable, using the simplified view:', err?.message || err);
-      // anything the engine left behind in the host goes
-      try { while (host.firstChild) host.removeChild(host.firstChild); } catch { /* ignore */ }
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
     }
   }
+  checkActive(signal);
   return guardView(createFallbackView(host, { ...opts, assets: data.get('assets') }), 'fallback');
 }
 
@@ -223,29 +275,57 @@ export async function mountFieldView(host) {
  */
 export function useFieldView(hostRef) {
   const [state, setState] = useState({ view: null, kind: 'loading' });
+  const [attempt, setAttempt] = useState(0);
+  const retries = useRef(0);
   const viewRef = useRef(null);
   useEffect(() => {
-    let dead = false;
+    let dead = false, retrying = false;
     const host = hostRef.current;
     if (!host) return undefined;
-    mountFieldView(host).then((view) => {
-      if (dead) { view.destroy(); return; }
-      viewRef.current = view;
-      globalThis.__SP_VIEW__ = view; // dev / E2E introspection (view.raw.stats?.())
-      setState({ view, kind: view.kind });
-    }, (err) => console.error('[field] mount failed', err));
+    setState({ view: null, kind: 'loading' });
+    const controller = new AbortController();
+      mountFieldView(host, { signal: controller.signal }).then((view) => {
+        if (dead) { view.destroy(); return; }
+        viewRef.current = view;
+        if (view.kind === 'engine') retries.current = 0;
+        // 设置「显示其他玩家的皮肤」 (docs/SKINS.md) needs to know which pieces are this page's own: the identity is on the
+        // app store (`me.playerId`, set by welcome), so the view is told it rather than resolving it per frame. Told
+        // before the first board arrives — the mount waits for `enterBattle`/`setPrep`, which the game screen calls after.
+        view.setMe?.(store.get().me?.playerId || null);
+        view.setSkins?.(store.get().match?.public?.players);
+        globalThis.__SP_VIEW__ = view; // dev / E2E introspection (view.raw.stats?.())
+        setState({ view, kind: view.kind });
+      }, (err) => { if (!dead && !controller.signal.aborted) console.error('[field] mount failed', err); });
     const unsub = settingsStore.subscribe((s) => viewRef.current?.setSettings?.(s));
+    // room.skins is accepted in every phase: update the current field without restarting its battle runner.
+    const unsubSkins = store.subscribe((s, prev) => {
+      if (s.me?.playerId !== prev.me?.playerId) viewRef.current?.setMe?.(s.me?.playerId || null);
+      if (s.match?.public?.players !== prev.match?.public?.players) viewRef.current?.setSkins?.(s.match?.public?.players);
+    });
     const onResize = () => viewRef.current?.resize();
+    // A temporary network/vendor failure must not pin this mounted match to fallback forever. Retry on a useful
+    // user event, at most twice in succession; the effect cleanup disposes the old view before creating its successor.
+    const onRetry = () => {
+      if (dead || retrying || viewRef.current?.kind !== 'fallback' || renderPref() === 'fallback'
+        || document.visibilityState !== 'visible' || globalThis.navigator?.onLine === false || retries.current >= 2) return;
+      retrying = true; retries.current++; setAttempt((n) => n + 1);
+    };
     window.addEventListener('resize', onResize);
+    window.addEventListener('online', onRetry);
+    document.addEventListener('visibilitychange', onRetry);
     return () => {
       dead = true;
+      controller.abort();
       unsub();
+      unsubSkins();
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('online', onRetry);
+      document.removeEventListener('visibilitychange', onRetry);
       // the dev hook must not keep the destroyed view — and through its host the whole detached match screen — alive
       if (viewRef.current && globalThis.__SP_VIEW__ === viewRef.current) globalThis.__SP_VIEW__ = null;
       viewRef.current?.destroy();
       viewRef.current = null;
     };
-  }, []);
+  }, [attempt]);
   return state;
 }

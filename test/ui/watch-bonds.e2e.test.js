@@ -13,12 +13,12 @@
 //   the guest leaks, the host and the AI help → the guest (phone) on 全景 sees helper 1's bonds (never its own), taps
 //   each helper's avatar (前往查看) → the camera goes to that helper's half, the ‹ › pill and the strip name the same
 //   helper, 返回战场 sits in the pill and leaves no error; the host (helper, desktop) keeps its own bonds on 全景.
-// Final Assault spectator (2 humans + 2 AI at the boss round, the guest eliminated at the jump): the guest auto-observes
-//   the pair field → its first player's bonds (never its own), taps the second player's operator and its card's bond
-//   chip → the SECOND player's popup (the strip stays on the first), taps each pair player → their half + bonds, taps
-//   the lone field's player → that field and its player's bonds.
-// After the own battle (2 humans + 1 idle AI from round 3, 1× combat): the host's battle ends first, the host watches a
-//   teammate still fighting → the strip shows that teammate's bonds with the observing pill "👁 name" + 返回战场; a
+// Final Assault spectator (2 humans + 2 AI at the boss round, the guest eliminated at the jump, boss pairs by seat): the
+//   guest auto-observes the pair field → its first player's bonds (never its own), taps the second player's operator
+//   and its card's bond chip → the SECOND player's popup (the strip stays on the first), taps each pair player → their
+//   half + bonds, taps the lone field's player → that field and its player's bonds.
+// After the own battle (2 humans + 1 idle AI from round 3, 1× combat, the guest's enemies spawning at twice their times):
+//   the host's battle ends first, the host watches a teammate still fighting → the strip shows that teammate's bonds with the observing pill "👁 name" + 返回战场; a
 //   reload keeps all three (the resent field is adopted — battle/observe.js resumedWatch); 返回战场 → the own bonds.
 // Unit counterparts: test/ui/watch-bonds.test.js (selection logic incl. 联防), test/match/watch-bonds.test.js (views),
 // test/match/observe.test.js (resumedWatch).
@@ -30,7 +30,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { Client, ROOT, sleep, hasChrome, startRealServer, problemsOf } from '../e2e/client.mjs';
+import { Client, ROOT, sleep, hasChrome, startRealServer, problemsOf, waitForFunctionLong } from '../e2e/client.mjs';
 
 const ENABLED = process.env.SP_E2E === '1' && hasChrome() && existsSync(path.join(ROOT, 'public/assets'));
 const HOST_KIT = ['chess_char_1_10_a', 'chess_char_1_12_a']; // 古米 (坚守), 艾丝黛尔 (萨尔贡)
@@ -39,6 +39,10 @@ const GUEST_KIT = ['chess_char_1_03_a', 'chess_char_1_09_a']; // 惊蛰 (炎), �
 // the AI seats five 拉特兰 ones + 古米 (信仰搅拌机, 莫斯提马, 能天使, 空弦, 送葬人; 坚守) — different bonds on each strip
 const UNITE_HOST_KIT = ['chess_char_4_23_a', 'chess_char_4_24_a', 'chess_char_3_06_a', 'chess_char_3_13_a', 'chess_char_1_12_a', 'chess_char_2_06_a'];
 const BOT_KIT = ['chess_char_4_01_a', 'chess_char_4_02_a', 'chess_char_3_01_a', 'chess_char_3_21_a', 'chess_char_2_01_a', 'chess_char_1_10_a'];
+// "after the own battle": the same host without 菲莱 — the layout planner behind fastServer's autoPlace puts a zero-range
+// guard on a road tile first (PR #339, §27.35), where she holds the enemies and the host's battle could run 109 s of a
+// 110 s round-3 limit (measured; 53–68 s without her)
+const AFTER_HOST_KIT = UNITE_HOST_KIT.filter((id) => id !== 'chess_char_3_06_a');
 
 /** The strip as shown: whose (data-owner), the bonds (data-bond) with their counts, the tag's text. */
 const stripOf = (c) => c.page.evaluate(() => {
@@ -470,10 +474,12 @@ describe('DESIGN §20.15 — the bond strip shows the watched teammate\'s bonds 
   });
 
   test('after the own battle: the watched teammate\'s bonds, kept through a reload with the observing pill + 返回战场 (desktop)', { timeout: 12 * 60 * 1000 }, async () => {
-    // the host's six 萨尔贡 operators end their battle early; the guest (no board) and the idle AI leak for the enemies'
-    // whole walk (combat at 1×: a window for the reload) — the host watches one of them, reloads, then goes back
+    // the host's five 萨尔贡 operators end their battle first; the guest (no board) leaks, and its enemies spawn at twice
+    // their times (fastServer SP_SLOW_SPAWNS), so its battle runs to the round's time limit — a window of 40 s and more
+    // for watching it and a reload (at the scheduled times a leaker's walk outlasted the host's battle by 5–11 s in 0.2.1
+    // and 0.2.2 alike, and the 0.2.2 full pass lost 返回战场 to 联防); the host watches the guest, reloads, then goes back
     const srv = await startRealServer({ fast: { timerScale: 1, combatSpeed: 1, startRound: 3, idleBots: true, autoPlace: true,
-      kits: [UNITE_HOST_KIT, []] } });
+      kits: [AFTER_HOST_KIT, []], slowSpawns: '1:2' } });
     const P = (await import('puppeteer-core')).default;
     let host = null;
     let guest = null;
@@ -485,8 +491,9 @@ describe('DESIGN §20.15 — the bond strip shows the watched teammate\'s bonds 
         await sleep(1500);
         for (const c of [host, guest]) if (!(await c.st()).ready) await c.click('.readybtn');
         await host.waitFor((s) => s.phase === 'COMBAT', 'combat', 60000);
-        // the own battle over while a teammate's still runs
-        const target = await host.page.waitForFunction(() => {
+        // the own battle over while a teammate's still runs (at 1× it may last longer than the browser's 90 s protocol
+        // timeout, which cut a plain page.waitForFunction off with a bare "Waiting failed")
+        const target = await waitForFunctionLong(host.page, () => {
           const s = globalThis.__SP__.store.get();
           const pub = s.match.public;
           if (pub?.phase !== 'COMBAT') return { gone: true };
@@ -538,8 +545,13 @@ describe('DESIGN §20.15 — the bond strip shows the watched teammate\'s bonds 
         for (const id of await pubBonds()) assert.ok(st.bonds.includes(id), `after the reload: ${name}'s ${id} on the strip (${JSON.stringify(st.bonds)})`);
         await sleep(1500); // the phase banner of the fresh screen
         await host.shot('reloaded');
-        // 返回战场 → the own bonds, untagged
-        await host.click('.chud__observe .chud__back', '返回战场');
+        // 返回战场 → the own bonds, untagged. The watched battle may end meanwhile — 联防 or the settlement takes the
+        // screen and the pill with it (the 0.2.2 full pass) — then the next round tries again
+        if (!(await host.click('.chud__observe .chud__back', '返回战场', { optional: true, timeout: 8000 }))) {
+          const phase = (await host.st()).phase;
+          if (phase !== 'COMBAT') { console.log(`round ${round}: the battles ended before 返回战场 (${phase}), next round`); continue; }
+          throw new Error('host: nothing clickable for .chud__observe .chud__back "返回战场" while the battle runs');
+        }
         await host.page.waitForFunction(() => !document.querySelector('.gm__bonds .bstrip')?.getAttribute('data-owner'), { timeout: 8000 });
         st = await stripOf(host);
         assert.deepEqual([st.owner, st.observe], [null, null], 'back: own bonds, no observing pill');
@@ -558,9 +570,19 @@ describe('DESIGN §20.15 — the bond strip shows the watched teammate\'s bonds 
     }
   });
 
+  /** The official 协议已失效 dialog (ui/downedPlate.js) a player sees when their own LP runs out while the team plays on:
+   * 继续观战 closes it (a no-op when it is not open). */
+  async function continueWatching(c) {
+    const btn = await c.page.waitForSelector('[data-testid="downed-plate"] ~ .downm__btns .downm__btn--watch, .downm__btn--watch', { timeout: 4000 }).catch(() => null);
+    if (btn) { await btn.click(); await c.page.waitForFunction(() => !document.querySelector('[data-testid="downed-plate"]'), { timeout: 5000 }).catch(() => {}); }
+  }
+
   test('Final Assault spectator (eliminated): the pair\'s first player, each picked player\'s half + bonds, the lone field', { timeout: 8 * 60 * 1000 }, async () => {
+    // boss pairs by seat (fastServer SP_SEAT_PAIRS): the eliminated guest follows the host (the first player still in,
+    // MatchWatch._watchTargetOf), and under the random pairs of 0.2.5 the host fought alone in one match of three — the
+    // guest then watched the lone field, which has no ‹ › pill
     const srv = await startRealServer({ fast: { timerScale: 1, combatSpeed: 2, startRound: 'boss', idleBots: true, autoPlace: true,
-      kits: [UNITE_HOST_KIT, []], botChess: BOT_KIT, eliminate: [1] } });
+      kits: [UNITE_HOST_KIT, []], botChess: BOT_KIT, eliminate: [1], seatPairs: true } });
     const P = (await import('puppeteer-core')).default;
     let host = null;
     let guest = null;
@@ -571,6 +593,8 @@ describe('DESIGN §20.15 — the bond strip shows the watched teammate\'s bonds 
       await sleep(1500);
       await host.click('.readybtn');
       for (const c of [host, guest]) await c.waitFor((s) => s.phase === 'FINAL_ASSAULT', 'Final Assault', 90000);
+      // the eliminated guest answers the official 协议已失效 dialog (PR #705) with 继续观战 before watching
+      await continueWatching(guest);
       await guest.page.waitForSelector('.chud__layers', { timeout: 20000 });
       await sleep(1000);
       const mv = await matchView(guest);

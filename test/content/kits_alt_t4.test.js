@@ -1,5 +1,5 @@
 // Tier-4 operator loadouts (DESIGN §16): every selectable NON-default skill of every visible tier-4 chess has a
-// hand-authored spec in server/sim/content/kits/tier4.js (`skills[skillId]`), proven here by its signature effect for
+// hand-authored spec in its kit file (server/sim/content/kits/ops/, `skills[skillId]`), proven here by its signature effect for
 // the normal (Lv4) and the elite (Lv7) chess; non-default modules (and 'none') change what their text says. Numbers
 // are read back from the data blackboards (the SELECTED skill's `bb`), real battles through the harness.
 import { test } from 'node:test';
@@ -109,6 +109,30 @@ test('信仰搅拌机 S1 铳骑主考官 (自动触发 ⇒ DEFAULT: hurt SP, fir
     for (const c of skillHits) approx(c.amount, u.s.atk * bb.atk_scale, 1e-6, `${id} hit`);
     const shots = h.hooksOf('attack').filter((c) => c.attacker === ins).length;
     assert.equal(ins.skill.ammoLeft, ammo0 - shots + bb.charge, `${id} reloaded ${bb.charge} bullet(s)`);
+    checkInvariants(h.b);
+  }
+});
+
+test('信仰搅拌机 S1 reloads the latest-deployed 拉特兰 ammo user around him, not the nearest (PRTS 备注; GitHub #325, PR #329)', () => {
+  for (const redeploy of [false, true]) {
+    // 隐现 ×2: the orthogonal neighbour deployed first, the diagonal one after it (both on his 8 surrounding tiles)
+    const h = battle([U('chess_char_4_01_a', 10, 5, 0), U('chess_char_1_01_a', 10, 4, null, null, { uid: 2 }), U('chess_char_1_01_a', 9, 4, null, null, { uid: 3 })]);
+    h.step();
+    const u = h.unit('chess_char_4_01_a'), near = h.unit(2), far = h.unit(3);
+    if (redeploy) { // a redeploy is the latest deployment
+      h.b.retreat(near, { reason: 'raid' });
+      assert.ok(h.b._deploy(near));
+    }
+    const latest = redeploy ? near : far, other = redeploy ? far : near;
+    assert.ok(latest.deploySeq > other.deploySeq);
+    for (const a of [near, far]) { assert.ok(a.skill.activate('test', { free: true })); a.skill.ammoLeft = 5; }
+    const e = h.spawn('enemy_dummy', { pos: [10, 6] });
+    assert.ok(u.skill.activate('test', { free: true }));
+    h.b.forceAttack(u, [e]);
+    h.run(0.5);
+    const reloads = h.eventsOf('fx').filter((x) => x[1] === 'reload');
+    assert.ok(reloads.length > 0, 'a reload happened');
+    assert.ok(reloads.every((x) => x[4].id === latest.id), `${redeploy ? 'after a redeploy, the redeployed one' : 'the later-deployed diagonal one'} is reloaded`);
     checkInvariants(h.b);
   }
 });
@@ -265,6 +289,13 @@ test('伊内丝 S3 独影归途: first deployment leaves a sentry and retreats; 
     const sk = D(id, 2).skill, bb = sk.bb;
     const h = battle([U(id, 10, 5, 2)], { flags: { dpInit: 99, dpPerSec: 0 } });
     const u = h.unit(id);
+    h.b.start();
+    assert.equal(u.skill.kind, 'duration');
+    assert.equal(u.skill.active, false, 'first deployment does not activate the skill');
+    assert.equal(u.skill.activations, 0);
+    assert.equal(h.hooksOf('skillStart').filter((c) => c.unit === u).length, 0, 'placing a sentry emits no skillStart');
+    assert.equal(u.skill.timeLeft, 0, 'first deployment places the sentry without a full effect window');
+    assert.equal(u.findBuff('ines:s3'), null);
     const near = [];
     for (let i = 0; i < 3; i++) near.push(h.spawn('enemy_dummy', { pos: [10, 6] }), h.spawn('enemy_dummy', { pos: [10, 4] }));
     const far = h.spawn('enemy_dummy', { pos: [10, 8] });
@@ -273,9 +304,14 @@ test('伊内丝 S3 独影归途: first deployment leaves a sentry and retreats; 
     assert.ok(left && left.reason === 'retreat', `${id}: leaves right after the first deployment`);
     assert.ok(h.runUntil(() => u.alive && u.deployed, 2), 'redeploy timer refreshed: back at once');
     const buff = u.findBuff('ines:s3');
-    assert.ok(buff, 'passive buff on the redeploy');
+    assert.ok(buff, 'ATK effect on the redeploy');
     approx(buff.mods.atkPct, bb.atk, 1e-9);
-    approx(buff.timeLeft, sk.duration, 0.1);
+    approx(u.skill.timeLeft, sk.duration, 0.1);
+    assert.equal(u.skill.active, true);
+    assert.equal(u.skill.activations, 1);
+    assert.equal(h.hooksOf('skillStart').filter((c) => c.unit === u).length, 1, 'the redeployment starts the skill once');
+    assert.equal(u.skill.ready, false);
+    assert.equal(h.snapshot().units.find((t) => t[0] === u.id)[6], sk.duration);
     const recall = dmgBy(h, u, tagged('sentryRecall'));
     assert.equal(recall.length, bb.max_target, `${id}: recall hits ≤ ${bb.max_target} of 6`);
     assert.ok(recall.every((c) => near.includes(c.target)) && !recall.some((c) => c.target === far));
@@ -287,6 +323,15 @@ test('伊内丝 S3 独影归途: first deployment leaves a sentry and retreats; 
     assert.ok(hits > 0);
     assert.equal(h.b.getPlayer('p1').dp, dpAt + hits * bb.cost, 'one DP per damage while the passive lasts');
     assert.equal(h.hooksOf('death').filter((c) => c.unit === u).length, 1, 'only the first deployment leaves');
+    h.run(sk.duration);
+    assert.equal(u.skill.active, false);
+    assert.equal(u.skill.ready, false);
+    assert.equal(u.findBuff('ines:s3'), null);
+    const dpEnd = h.b.getPlayer('p1').dp;
+    h.run(2);
+    assert.equal(h.b.getPlayer('p1').dp, dpEnd, 'no skill DP after the actual window ends');
+    assert.equal(h.hooksOf('death').filter((c) => c.unit === u).length, 1, 'stays deployed after the window');
+    assert.deepEqual(h.hooksOf('skillEnd').filter((c) => c.unit === u).map((c) => c.reason), ['duration']);
     checkInvariants(h.b);
   }
 });
@@ -488,6 +533,8 @@ test('歌蕾蒂娅 S1 缺水的大洋裂断: charges; next attack atk_scale (×1
     assert.equal(sk.length, 1);
     approx(sk[0].amount, u.s.atk * bb.atk_scale * t1.atk_scale, 1e-6, `${id} hit`);
     assert.ok(e.x < x0 - 0.5, `${id}: pulled towards her (${x0} → ${e.x})`);
+    assert.ok(h.eventsOf('fx').some((f) => f[1] === 'displace' && f[4]?.keepFacing === true),
+      `${id}: S1 pull carries the common facing metadata`);
     // 中力 vs weight 1 (受力等级 0): "必定拉至身前" — to the 急停 radius 0.6708 around her centre (PRTS 推与拉), never past it
     approx(e.x, u.x + 0.6708, 1e-6, `${id}: stops at her front`);
   }
@@ -510,6 +557,8 @@ test('歌蕾蒂娅 S2 缺水的掌握怒海: BAT +0.5 s, wider range, 2 targets 
     assert.equal(hits.length, bb['attack@max_target']);
     for (const c of hits) approx(c.amount, u.s.atk * bb['attack@atk_scale'] * t1.atk_scale, 1e-6);
     for (const e of atk.targets) assert.ok(e.x < 6 - 0.4, `pulled (${e.x})`);
+    assert.ok(h.eventsOf('fx').some((f) => f[1] === 'displace' && f[4]?.keepFacing === true),
+      `${id}: S2 pull carries the common facing metadata`);
   }
 });
 
@@ -611,10 +660,11 @@ test('缄默德克萨斯 S1 细雨无声: passive ATK up for its duration; hits 
     const h = battle([U(id, 10, 4, 0)]);
     h.step();
     const u = h.unit(id);
-    const buff = u.findBuff('texas2:drizzle');
-    assert.ok(buff, `${id}: passive active on deployment`);
-    approx(buff.mods.atkPct, bb.atk, 1e-9);
-    assert.ok(u.findBuff('texas2:rainAtk'), 'talent 德克萨斯传统 ATK during the passive');
+    assert.equal(u.skill.kind, 'duration');
+    assert.equal(u.skill.active, true);
+    assert.equal(u.skill.charges, 0);
+    approx(u.skill.spec.mods.atkPct, bb.atk + D(id, 0).talents[0].bb.atk, 1e-9, 'skill and 德克萨斯传统 ATK');
+    assert.equal(h.snapshot().units.find((t) => t[0] === u.id)[6], sk.duration);
     const e = h.spawn('enemy_dummy', { pos: [10, 5] });
     h.run(3);
     assert.ok(e.s.flags.silence, 'hit target silenced (失去特殊能力)');
@@ -623,7 +673,10 @@ test('缄默德克萨斯 S1 细雨无声: passive ATK up for its duration; hits 
     assert.ok(dot.length >= 2, `a DoT tick every second although she re-hits faster (${dot.length})`);
     for (const c of dot) approx(c.amount, bb['attack@texas2_s_1[dot].dot_damage'], 1e-9, 'fixed arts per second (RES 0)');
     h.run(sk.duration);
-    assert.ok(!u.findBuff('texas2:drizzle'), 'ends with the skill duration');
+    assert.equal(u.skill.active, false, 'ends with the skill duration');
+    assert.equal(u.skill.ready, false);
+    assert.equal(h.hooksOf('skillEnd').filter((c) => c.unit === u && c.reason === 'duration').length, 1);
+    assert.ok(e.s.flags.silence && e.findBuff(`texas2:drizzleDot:${u.id}`), 'applied enemy effects keep their own duration');
     h.run(bb['attack@silence'] + 1);
     assert.ok(!e.s.flags.silence && !e.findBuff(`texas2:drizzleDot:${u.id}`), 'no new silence / DoT after the passive');
   }
@@ -657,8 +710,8 @@ test('缄默德克萨斯 S2 阵雨连绵: deploy burst atk_scale arts + RES down
     approx(burst[0].amount, u.s.atk * bb.atk_scale * 0.5, 1e-6, 'arts burst vs RES 50');
     approx(e.s.res, 50 * (1 + bb.magic_resistance), 1e-6, 'RES down');
     assert.equal(far.s.res, 50);
-    approx(u.findBuff('texas2:shower').mods.atkPct, bb.atk, 1e-9);
-    approx(u.findBuff('texas2:shower').timeLeft, sk.duration, 1e-6);
+    approx(u.skill.spec.mods.atkPct, bb.atk + D(id, 1).talents[0].bb.atk, 1e-9);
+    approx(u.skill.timeLeft, sk.duration, 1e-6);
     h.run(2);
     const hits = dmgBy(h, u, (c) => c.dmg.isAttack);
     assert.ok(hits.length >= 2 && hits.every((c) => c.type === 'arts'), 'arts attacks');
@@ -666,10 +719,63 @@ test('缄默德克萨斯 S2 阵雨连绵: deploy burst atk_scale arts + RES down
     for (const c of hits) per.set(c.dmg.attackId, (per.get(c.dmg.attackId) ?? 0) + 1);
     assert.ok([...per.values()].every((v) => v === 2), 'double hits');
     h.run(sk.duration);
+    assert.equal(u.skill.active, false);
+    assert.equal(u.skill.ready, false);
     const n0 = dmgBy(h, u, (c) => c.dmg.isAttack).length;
     h.run(3);
     const late = dmgBy(h, u, (c) => c.dmg.isAttack).slice(n0);
     assert.ok(late.length >= 1 && late.every((c) => c.type === 'phys'), 'back to single phys hits after the duration');
+  }
+});
+
+test('缄默德克萨斯 S1/S2/S3: first kill reopens a full window, including a kill inside the deployment burst', () => {
+  for (const id of pair('chess_char_4_16_a')) for (const index of [0, 1, 2]) {
+    const life = [];
+    const h = battle([U(id, 10, 4, index)], { extra: { setup(b) {
+      for (const name of ['skillStart', 'skillEnd']) b.on(name, (c) => life.push([name, c.reason]), { priority: 1000 });
+    } } });
+    h.b.start();
+    const u = h.unit(id), sk = u.skill;
+    h.run(2);
+    u.hp = u.s.maxHp / 2;
+    const e = h.spawn('enemy_dummy', { pos: [10, 5] });
+    h.b.kill(e, u);
+    assert.equal(u.mem.texasKilled, true);
+    approx(u.hpRatio, 1);
+    assert.equal(u.findBuff('texas2:swordplay'), null);
+    assert.equal(sk.activations, 2);
+    approx(sk.timeLeft, sk.duration);
+    assert.equal(sk.charges, 0);
+    assert.equal(sk.ready, false);
+    assert.deepEqual(h.hooksOf('skillEnd').map((c) => c.reason), ['recast']);
+    h.b.kill(h.spawn('enemy_dummy', { pos: [10, 5] }), u);
+    assert.equal(sk.activations, 2, 'only first kill recasts');
+    h.run(sk.duration + 0.1);
+    assert.equal(sk.active, false);
+    assert.deepEqual(h.hooksOf('skillEnd').map((c) => c.reason), ['recast', 'duration']);
+    assert.deepEqual(h.hooksOf('skillStart').map((c) => c.reason), ['deploy', 'kill']);
+    h.b.retreat(u);
+    const lifeAt = life.length;
+    const weak = h.spawn('enemy_dummy', { pos: [10, 5] });
+    weak.hp = 1;
+    assert.ok(h.b.redeploy(u, { free: true }));
+    if (index === 0) h.b.kill(weak, u); // S1 has no deployment burst
+    assert.equal(u.mem.texasKilled, true);
+    assert.equal(sk.activations, 4, 'new deployment and first-kill recast, including synchronous burst reentry');
+    assert.deepEqual(life.slice(lifeAt), [['skillStart', 'deploy'], ['skillEnd', 'recast'], ['skillStart', 'kill']]);
+    assert.equal(u.findBuff('texas2:swordplay'), null);
+    approx(sk.timeLeft, sk.duration);
+    if (index === 2) {
+      const target = h.spawn('enemy_dummy', { pos: [10, 5] });
+      h.run(sk.duration + 0.1);
+      const waves = new Set(dmgBy(h, u, tagged('swordRain')).filter((c) => c.target === target).map((c) => c.t));
+      assert.equal(waves.size, sk.duration, 'reentrant deployment keeps a full set of rain waves');
+      const n = dmgBy(h, u, tagged('swordRain')).length;
+      h.run(2);
+      assert.equal(dmgBy(h, u, tagged('swordRain')).length, n, 'rain stops at skill end');
+      assert.ok(target.alive);
+    }
+    checkInvariants(h.b);
   }
 });
 
@@ -719,7 +825,7 @@ test('星熊 module PRO-X 护身符: DEF +20 % while blocking', () => {
   approx(def(null, true), def(null, false), 1e-9);
 });
 
-test('泥岩 S1 防御力强化·γ型 (TAKE_DAMAGE) and S3 秽壤的血脉 (dormant & invulnerable & blocking, slow; then stun, buffs, hits all blocked)', () => {
+test('泥岩 S1 防御力强化·γ型 (TAKE_DAMAGE) and S3 秽壤的血脉 (闭锁: invulnerable, no attack, blocks nobody — the enemies she held walk on —, slow; then stun, buffs, hits all blocked)', () => {
   for (const id of pair('chess_char_4_18_a')) {
     const b1 = D(id, 0).skill.bb, sk = D(id, 2).skill, b3 = sk.bb;
     let h = battle([U(id, 10, 4, 0)], { enemies: { enemy_hitter: dummy({ key: 'enemy_hitter', atk: 300, bat: 1 }) } });
@@ -734,21 +840,32 @@ test('泥岩 S1 防御力强化·γ型 (TAKE_DAMAGE) and S3 秽壤的血脉 (dor
     for (let i = 0; i < 3; i++) h.spawn('e_walk', { routeIndex: 0 });
     u = h.unit(id);
     assert.ok(h.runUntil(() => u.blocking.length === 3, 30), 'blocks three walkers');
+    const walkers = u.blocking.slice();
     const hp0 = u.hp;
     assert.ok(u.skill.activate('test', { free: true }));
     const t0 = h.b.time;
-    h.run(b3.sleep - 1);
+    h.step();
+    // 闭锁 (PRTS 备注 "实际将会进入闭锁状态"; PRTS 异常效果 闭锁 = 强制缴械 + 无敌 + 不可阻挡, 不可阻挡 "无法阻挡/被阻挡，自动解除阻挡")
+    assert.ok(u.blocking.length === 0 && walkers.every((e) => e.blockedBy !== u), `${id}: 闭锁 lets go of the enemies she held`);
+    assert.ok(walkers.every((e) => e.findBuff(`mudrok:slow:${u.id}`)), 'enemies around slowed');
+    const x0 = walkers.map((e) => e.x);
+    h.run(1);
+    assert.ok(walkers.every((e, i) => e.removed || e.x < x0[i] - 0.05), `${id}: they walk on`);
+    h.run(b3.sleep - 2.5);
     assert.equal(u.hp >= hp0 - 1e-6, true, `${id}: no damage while dormant`);
-    assert.equal(u.blocking.length, 3, 'keeps blocking');
+    assert.equal(u.blocking.length, 0, `${id}: blocks nobody while dormant`);
     assert.equal(h.hooksOf('attack').filter((c) => c.attacker === u && c.t > t0).length, 0, 'cannot act');
-    assert.ok(u.blocking.every((e) => e.findBuff(`mudrok:slow:${u.id}`)), 'enemies around slowed');
-    h.run(1.2);
-    assert.ok(u.findBuff('mudrok:awake'), 'awake');
-    for (const e of u.blocking) assert.ok(e.s.flags.stun, 'ground enemies around stunned');
+    const near = [0, 1, 2].map(() => h.spawn('enemy_dummy', { pos: [9, 5] }));   // on her tile before she wakes
+    h.step();
+    assert.equal(u.blocking.length, 0, `${id}: not blocked before she wakes`);
+    assert.ok(h.runUntil(() => !!u.findBuff('mudrok:awake'), 2), 'awake');
+    h.run(0.2);
+    for (const e of near) assert.ok(e.s.flags.stun, 'ground enemies around stunned');
     approx(u.s.atk, u.base.atk * (1 + b3.atk) * (u.findBuff('mudrok:module') ? 1 + (u.def.traitBb.atk ?? 0) : 1), 1e-6, 'ATK');
     approx(u.s.interval, (u.base.bat + b3.base_attack_time) * 100 / u.s.aspd, 1e-6, 'BAT −0.3 s');
     assert.ok(h.runUntil(() => h.hooksOf('attack').some((c) => c.attacker === u && c.t > t0), 5));
     assert.equal(h.hooksOf('attack').find((c) => c.attacker === u && c.t > t0).targets.length, 3, 'attacks every blocked enemy');
+    assert.ok(h.runUntil(() => u.blocking.length === 3, 4), `${id}: she blocks again once awake (their stun over)`);
     h.runUntil(() => !u.skill.active, sk.duration);
     assert.ok(!u.findBuff('mudrok:awake'));
     checkInvariants(h.b);

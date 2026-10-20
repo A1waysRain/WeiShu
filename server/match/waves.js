@@ -37,6 +37,7 @@
 // largest owner group (client `_CalculateActionPredelayConsiderUid`, decoded).
 
 import { createRng, deriveSeed } from '../sim/rng.js';
+import { PLUGIN_ACTION_UNITS } from '../../shared/plugins/limits.js';
 
 const ACLOON = 'enemy_9012_acloon';
 const DEFAULT_PLACEHOLDERS = Object.freeze({
@@ -44,6 +45,9 @@ const DEFAULT_PLACEHOLDERS = Object.freeze({
   NF: { cls: 'normal', fly: true }, EF: { cls: 'elite', fly: true }, SF: { cls: 'special', fly: true },
 });
 const MIN_ACTION_INTERVAL_RATIO = 0.05;
+/** The most units one wave action fields (templateSpawns' count clamp; replacedCount and bountyPlan stay within it) — the
+ * data-plugin check caps the replaced counts at the same number (shared/plugins/limits.js). */
+const MAX_ACTION_UNITS = PLUGIN_ACTION_UNITS;
 /** 联防 timing (client `_CalculateActionPredelayConsiderUid`): owner offset ACTION_INTERVAL_FOR_UID, unit step cap
  * MAX_ACTION_INTERVAL_FOR_UID. */
 const UNITE_OWNER_STEP = 0.5;
@@ -103,8 +107,10 @@ const beFactor = (gd, key) => {
  */
 export function replacedCount(gd, tplKey, n, newKey) {
   const g = gen(gd);
-  const min = Number.isInteger(g.minReplacedEnemyCount) ? g.minReplacedEnemyCount : 1;
-  const max = Number.isInteger(g.maxReplacedEnemyCount) ? g.maxReplacedEnemyCount : 5;
+  // (bounded like a template action's own count — templateSpawns' 1–50: a data plugin's 4e7 would be one action's units,
+  // and an array of them in bountyPlan; the official 1 / 5 are unchanged)
+  const min = Math.max(1, Math.min(MAX_ACTION_UNITS, Number.isInteger(g.minReplacedEnemyCount) ? g.minReplacedEnemyCount : 1));
+  const max = Math.max(1, Math.min(MAX_ACTION_UNITS, Number.isInteger(g.maxReplacedEnemyCount) ? g.maxReplacedEnemyCount : 5));
   const f = Math.fround;
   const origin = f(f(n * attrPower(gd, tplKey)) / beFactor(gd, tplKey));
   const unit = f(attrPower(gd, newKey) / beFactor(gd, newKey));
@@ -154,7 +160,7 @@ export function pickRoundEntry(gd, rng, type, round) {
 /** Round type schedule: each chosen type × its slot count, filled with SPECIAL to maxLevelCnt, shuffled. */
 export function makeTypeSchedule(gd, rng, factions) {
   const g = gen(gd);
-  const max = intOr(g.maxLevelCnt, 15);
+  const max = Math.min(256, Math.max(0, intOr(g.maxLevelCnt, 15))); // loop-cap: schedule length [ASSUMED] DESIGN §32.5
   const fill = typeof g.fillType === 'string' ? g.fillType : (typeof g.alwaysIncludedType === 'string' ? g.alwaysIncludedType : 'SPECIAL');
   const types = gd.factions.types && typeof gd.factions.types === 'object' ? gd.factions.types : {};
   const slots = [];
@@ -162,7 +168,7 @@ export function makeTypeSchedule(gd, rng, factions) {
     const n = intOr(types[t]?.count, 3);
     for (let i = 0; i < n && slots.length < max; i++) slots.push(t);
   }
-  while (slots.length < max) slots.push(fill);
+  while (slots.length < max) slots.push(fill); // loop-cap: schedule length
   rng.shuffle(slots);
   return slots;
 }
@@ -197,7 +203,7 @@ export function setupMatchWaves(gd, rng, opts = {}) {
   const chosen = shuffled.slice(0, Math.min(n, shuffled.length));
   const factions = chosen.slice().sort((a, b) => (types[a]?.sortId ?? 9) - (types[b]?.sortId ?? 9));
   // bosses
-  const excluded = opts.excludeBossIds instanceof Set ? opts.excludeBossIds : new Set();
+  const excluded = new Set(opts.excludeBossIds || []);
   const bw = gd.bossWeights(false).filter(([id]) => !excluded.has(id));
   const bossId = bw.length ? weightedPick(rng, bw) : null;
   const hw = gd.bossWeights(true);
@@ -234,6 +240,13 @@ export function roundPick(gd, rng, factionsOrSetup, round) {
 /** Enemy scale mods for round r (bosses excluded by the caller). */
 export function scaleFor(gd, r) {
   return gd.enemyScale(r);
+}
+
+/** The spawn mods of a round's scale for a non-leader enemy: HP / ATK / speed, plus `supplyHpMul` when the round has one. */
+export function roundMods(scale) {
+  const m = { hpMul: scale.hpMul, atkMul: scale.atkMul, speedMul: scale.speedMul };
+  if (scale.supplyHpMul != null) m.supplyHpMul = scale.supplyHpMul;
+  return m;
 }
 
 /** Slot class of an enemy that has no placeholder slot (literal template keys, bounty adds). */
@@ -329,8 +342,9 @@ function templateSpawns(gd, tpl, round, pick) {
       interval: count > 1 ? step : 0,
       // the round multipliers are ENEMY effects on every enemy but 炎佑 (aceffect_enemy_1–5 `enemy_attribute_mul`,
       // enemy_exclude = enemy_9012_acloon): leader parts take them all; the leader takes ATK / speed but not HP — its HP
-      // is the server pool, "领袖单位于服务器的生命值加成不受上述加成影响" (PRTS 下半)
-      mods: isBoss ? { atkMul: scale.atkMul, speedMul: scale.speedMul, slot } : { hpMul: scale.hpMul, atkMul: scale.atkMul, speedMul: scale.speedMul, slot },
+      // is the server pool, "领袖单位于服务器的生命值加成不受上述加成影响" (PRTS 下半). `supplyHpMul` (roundMods) rides along for
+      // the 器物 hit-count units, which 补给线 / 补给线II leave out (archetypes.js `times`; also a 频次 enemy's death spawn)
+      mods: isBoss ? { atkMul: scale.atkMul, speedMul: scale.speedMul, slot } : { ...roundMods(scale), slot },
       actionIndex: i,
       preview: previewInfo(gd, key, routes[routeIndex], isBoss, leader),
     };
@@ -502,7 +516,7 @@ function bountyPlan(gd, round, wave, bounties, playerId, side) {
     const act = host ? acts.find((a) => a.index === host.index) : null;
     // the host's own units: only a server-sent action has any (a leader / random-group / invalid host spawns the
     // bounty list alone over its window — client _InsertSpActionToNormal finds no normal list for it)
-    const own = act && act.valid && act.server !== false ? act.count : 0;
+    const own = act && act.valid && act.server !== false ? Math.min(MAX_ACTION_UNITS, act.count) : 0;
     const sp = [];
     for (const it of items) for (let k = 0; k < it.count; k++) sp.push(it);
     // _InsertSpActionToNormal: insert the bounty units among the action's own units (list.Insert(FloorToInt(...)))
@@ -530,7 +544,7 @@ function bountyPlan(gd, round, wave, bounties, playerId, side) {
         routeIndex,
         count: run.len,
         interval: run.len > 1 ? step : 0,
-        mods: { hpMul: scale.hpMul, atkMul: scale.atkMul, speedMul: scale.speedMul, slot: classOf(gd, c.enemyKey), bountyId: b.id },
+        mods: { ...roundMods(scale), slot: classOf(gd, c.enemyKey), bountyId: b.id },
         tag: 'bounty',
         ownerPlayerId: playerId,
         preview: previewInfo(gd, c.enemyKey, routes[routeIndex], false, leader),

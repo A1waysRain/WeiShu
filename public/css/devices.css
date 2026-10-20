@@ -9,13 +9,14 @@
    3. touch: every small control gets an invisible ≥ 44 px hit area (::before, no layout change); on short touch
       screens (phones) the most used controls also grow visually
    4. reduced motion extras; fullscreen button
+   5. 异形屏适配: the player's own edge insets (设置, js/ui/screenFit.js)
    ========================================================================================== */
 
 :root {
-  --sa-t: max(env(safe-area-inset-top, 0px), var(--android-sa-t, 0px));
-  --sa-r: max(env(safe-area-inset-right, 0px), var(--android-sa-r, 0px));
-  --sa-b: max(env(safe-area-inset-bottom, 0px), var(--android-sa-b, 0px));
-  --sa-l: max(env(safe-area-inset-left, 0px), var(--android-sa-l, 0px));
+  --sa-t: env(safe-area-inset-top, 0px);
+  --sa-r: env(safe-area-inset-right, 0px);
+  --sa-b: env(safe-area-inset-bottom, 0px);
+  --sa-l: env(safe-area-inset-left, 0px);
   --tap-min: 44px;
 }
 
@@ -46,18 +47,6 @@ input, textarea, select { -webkit-user-select: text; user-select: text; }
 .gm > .spov { left: calc(2.8rem + var(--sa-l)); right: var(--sa-r); }
 /* every other screen is laid out inside the safe area (the app backdrop fills the notch strip) */
 .screen:not(.gm) { top: var(--sa-t); right: var(--sa-r); bottom: var(--sa-b); left: var(--sa-l); }
-/* Keep the title backdrop edge-to-edge; only its content avoids the cutout/bars. */
-.screen.title-screen {
-  inset: 0;
-  padding: var(--sa-t) var(--sa-r) var(--sa-b) var(--sa-l);
-}
-.title-screen .title-corner--tl { top: calc(.38rem + var(--sa-t)); left: calc(.44rem + var(--sa-l)); }
-.title-screen .title-corner--tr { top: calc(.38rem + var(--sa-t)); right: calc(.44rem + var(--sa-r)); }
-.title-screen .title-foot {
-  bottom: calc(.3rem + var(--sa-b));
-  left: calc(.44rem + var(--sa-l));
-  right: calc(.44rem + var(--sa-r));
-}
 .guide, .awayov { padding: var(--sa-t) var(--sa-r) var(--sa-b) var(--sa-l); }
 /* (in a match the toasts sit under the top bar: components.css .sp-in-match .toast-host already adds --sa-t) */
 html:not(.sp-in-match) .toast-host { margin-top: var(--sa-t); }
@@ -69,12 +58,12 @@ html:not(.sp-in-match) .toast-host { margin-top: var(--sa-t); }
    control, no layout change. Only controls that do not use ::before themselves are listed. */
 :where(.sp-coarse) :where(.tapx, .gtop__exit, .gtop__iconbtn, .enemybtn, .readybtn, .gm__gear, .fsbtn, .ewheel__btn, .ewheel__nav,
   .toolbtn, .funds__collapse, .team__btn, .effect, .bslot .bond, .vswitch__arrow, .edrawer__close, .dpanel__close, .bpop__close,
-  .modal__close, .uf__btn, .chud__back, .tabs__tab, .btn, .pill-btn, .title-guide, .stephead__guide, .set-toggle, .set-seg button) {
+  .modal__close, .uf__btn, .chud__back, .tabs__tab, .btn, .pill-btn, .title-guide, .stephead__guide, .set-toggle, .set-seg button, .set-fit__step) {
   position: relative;
 }
 .sp-coarse :is(.tapx, .gtop__exit, .gtop__iconbtn, .enemybtn, .readybtn, .gm__gear, .fsbtn, .ewheel__btn, .ewheel__nav,
   .toolbtn, .funds__collapse, .team__btn, .effect, .bslot .bond, .vswitch__arrow, .edrawer__close, .dpanel__close, .bpop__close,
-  .modal__close, .uf__btn, .chud__back, .tabs__tab, .btn, .pill-btn, .title-guide, .stephead__guide, .set-toggle, .set-seg button)::before {
+  .modal__close, .uf__btn, .chud__back, .tabs__tab, .btn, .pill-btn, .title-guide, .stephead__guide, .set-toggle, .set-seg button, .set-fit__step)::before {
   content: '';
   position: absolute; left: 50%; top: 50%; z-index: 0;
   width: max(100%, var(--tap-min)); height: max(100%, var(--tap-min));
@@ -115,7 +104,7 @@ html:not(.sp-in-match) .toast-host { margin-top: var(--sa-t); }
 .fsbtn { display: grid; place-items: center; padding: 0; background: rgba(8, 11, 10, .85); border: 1px solid var(--line-2); color: var(--text-lo); transition: color var(--t-fast), border-color var(--t-fast); }
 .fsbtn .icon { width: .26rem; height: .26rem; }
 .fsbtn:hover, .fsbtn[aria-pressed="true"] { color: var(--mint-400); border-color: var(--mint-700); }
-.title-fs { width: .4rem; height: .4rem; margin-left: .06rem; }
+.title-fs, .title-settings { width: .4rem; height: .4rem; margin-left: .06rem; }
 /* standalone / fullscreen: the browser bars are gone, nothing to reserve */
 .sp-standalone .rotate-hint__micro::after { content: ' · PWA'; }
 
@@ -158,7 +147,7 @@ html:not(.sp-in-match) .toast-host { margin-top: var(--sa-t); }
   .mode-cards { margin-bottom: .2rem; }
   .mode-card { min-height: 0; gap: .12rem; padding: .22rem .26rem .2rem; }
   .mode-card__icon { width: .66rem; height: .66rem; }
-  .mode-card__name { font-size: .32rem; }
+  .mode-card__name { font-size: calc(.4 * var(--t)); }
   .mode-card__points, .diff-card__effects, .tips, .create-box__hint { display: none; }
   .diff-list { gap: .1rem; }
   .diff-card { padding-top: .12rem; padding-bottom: .12rem; }
@@ -166,49 +155,26 @@ html:not(.sp-in-match) .toast-host { margin-top: var(--sa-t); }
   .create-box .btn--xl { height: .8rem; }
 }
 
-/* Narrow phone/tablet landscape: the lobby has several right-side actions, while the room header may
-   also contain an invite panel. Give that cluster a dedicated second row instead of letting it overlap
-   the centered heading or the safe-area edge. */
-@media (max-width: 1100px) {
-  .topbar {
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-rows: auto auto;
-    height: auto;
-    min-height: 1.1rem;
-    padding-top: .08rem;
-    padding-bottom: .08rem;
-    row-gap: .08rem;
-  }
-  .topbar__left { grid-column: 1; grid-row: 1; }
-  .topbar__center { grid-column: 2; grid-row: 1; align-items: flex-end; }
-  .topbar__right {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-self: stretch;
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    row-gap: .08rem;
-    padding-top: .02rem;
-  }
-  .topbar__right > * { flex: 0 0 auto; }
-  .me-chip__text { display: none; }
-}
+.rotate-hint__pwa { pointer-events: auto; margin-top: 6px; }
+.rotate-hint__pwa[hidden] { display: none; }
 
-/* Phone landscape: use the marked space for larger sign-in and join controls. */
-@media (orientation: landscape) and (max-height: 600px) and (pointer: coarse),
-       (orientation: landscape) and (max-height: 600px) and (any-pointer: coarse) {
-  .title-login { width: min(8.4rem, 78vw); padding: .26rem .32rem; gap: .18rem; }
-  .title-login .field__box { min-height: 44px; }
-  .title-login .field__input { font-size: max(.2rem, 16px); }
-  .title-login > .btn { min-height: 44px; }
-  .title-login .title-conn { gap: .14rem; font-size: max(.14rem, 12px); }
-  .title-login .title-conn > .btn, .title-login .pill-btn { white-space: nowrap; }
-  .join-panel .panel__body { padding: .28rem .3rem; gap: .2rem; min-height: 2.3rem; }
-  .join-row { flex-wrap: wrap; gap: .16rem; }
-  .join-row .field { flex: 1 0 100%; }
-  .join-row .field__box { min-height: 44px; }
-  .join-row .field__input { font-size: max(.2rem, 16px); }
-  .join-row > .btn, .join-row > .tooltip { flex: 1; }
-  .join-row .btn { width: 100%; min-height: 40px; }
-  .join-foot { font-size: max(.14rem, 12px); }
+/* ---- 5. 异形屏适配 (设置, ui/screenFit.js) ------------------------------------------------------------------------
+   The player's own insets for a screen whose cutout / curved edge the browser does not report (or reports wrongly in
+   fullscreen): .app-root becomes the inset box — every .screen is absolute inset 0, so it lands inside, and the board is
+   sized from its host — and the layout root 1rem is computed from that box (theme.css's rule with the insets taken
+   off). Only while <html data-fit> is set: with all four at 0 nothing here applies. The bands outside show the page
+   background; fixed overlays (dialogs, toasts) still use the whole screen. */
+html[data-fit] {
+  font-size: clamp(40px, min(calc((100vw - var(--fit-l, 0px) - var(--fit-r, 0px)) / 19.2), calc((100vh - var(--fit-t, 0px) - var(--fit-b, 0px)) / 10.8)), 240px);
+  font-size: clamp(40px, min(calc((100vw - var(--fit-l, 0px) - var(--fit-r, 0px)) / 19.2), calc((100svh - var(--fit-t, 0px) - var(--fit-b, 0px)) / 10.8)), 240px);
 }
+/* the screens' own box (theme.css .app-root: fixed, inset 0) and the full-page panels fixed over the screens (统计数据,
+   干员调配, 玩法说明) */
+html[data-fit] :is(.app-root, .st, .lo, .guide) {
+  left: var(--fit-l, 0px); right: var(--fit-r, 0px); top: var(--fit-t, 0px); bottom: var(--fit-b, 0px);
+}
+.set-fit { display: flex; flex-direction: column; gap: .06rem; }
+.set-fit__row { grid-template-columns: minmax(0, 1.5rem) auto minmax(.8rem, 1fr) auto minmax(.36rem, auto); gap: .1rem; }
+.set-fit__step { flex: none; width: .4rem; min-width: 28px; height: .34rem; min-height: 26px; padding: 0; border: 1px solid var(--line-2); background: rgba(0, 0, 0, .3);
+  color: var(--text-hi); font-size: calc(.2 * var(--t)); line-height: 1; cursor: pointer; }
+.set-fit__step:disabled { opacity: .35; cursor: default; }

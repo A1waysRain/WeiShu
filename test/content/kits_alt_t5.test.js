@@ -1,4 +1,4 @@
-// Tier 5 alternate skills & modules (DESIGN §16 operator loadouts; server/sim/content/kits/tier5.js `skills` maps).
+// Tier 5 alternate skills & modules (DESIGN §16 operator loadouts; the `skills` maps of the tier-5 kits, server/sim/content/kits/ops/).
 // Every selectable non-default skill of every visible tier-5 chess runs a real battle — normal (Lv4) and elite (Lv7) —
 // through the harness with its loadout (`skillIndex` / `moduleId` on the board entry, as a BattleSpec carries them),
 // and its signature effect is asserted with numbers from that skill's own blackboard (data/chess.json skills[]).
@@ -174,6 +174,19 @@ test('圣约送葬人 module REA-Y (已知悉): ASPD +12 with ≥ 2 enemies in r
     h.spawn('enemy_dummy', { pos: [11, 5] });
     h.run(0.5);
     assert.equal(u.s.aspd, u.base.aspd + want, moduleId);
+    done(h);
+  }
+});
+
+test('圣约送葬人 heals 50 per enemy hit with REA-Y or no module, 60 with REA-X (the REA-Y line\'s 12 is its ASPD, GitHub #400)', () => {
+  for (const [moduleId, want] of [['uniequip_003_excu2', 50], ['uniequip_002_excu2', 60], ['none', 50]]) {
+    const h = run({
+      defs: { enemies: { enemy_dummy: dummy('enemy_dummy') } },
+      units: [{ chessId: 'chess_char_5_01_b', row: 10, col: 4, moduleId }],
+      enemies: [{ key: 'enemy_dummy', pos: [10, 5] }],
+    });
+    const u = h.unit('chess_char_5_01_b');
+    assert.equal(u.profile.selfHeal, want, moduleId);
     done(h);
   }
 });
@@ -1000,7 +1013,7 @@ test('凛御银灰 S3 变革已至: skill range, line attacks bird_atk_scale × 
 // =================================================================================================================
 // 引星棘刺
 
-test('引星棘刺 S1 度算浪波: latest deployed ally in range gets the guard zone, DEF and healing (+3 s 心相)', () => {
+test('引星棘刺 S1 度算浪波: an alchemy unit on the lowest-HP ally: DEF +def and 生命回复速度 hp ratio × ATK/s on the 3×3 around it (+3 s 心相)', () => {
   for (const id of pair('15')) {
     const h = run({
       defs: { chess: { t_low: ally('t_low', { stats: { def: 100 } }), t_near: ally('t_near', { stats: { def: 100 } }), t_far: ally('t_far', { stats: { def: 100 } }) }, enemies: { enemy_dummy: dummy('enemy_dummy') } },
@@ -1021,7 +1034,10 @@ test('引星棘刺 S1 度算浪波: latest deployed ally in range gets the guard
     h.run(1.1);
     for (const a of [low, near]) assert.equal(a.s.def, 100 + bb.def, a.defId);
     assert.equal(far.s.def, 100);
-    approx(heals(h, u, (c) => c.target === near)[0].amount, u.s.atk * bb.hp_recovery_per_sec_ratio);
+    // 生命回复速度 (an hpRegen buff per unit, like 锡人 S2), not a heal of hers
+    for (const a of [low, near]) approx(a.buffs.find((b) => b.key === z.key)?.mods.hpRegen, u.s.atk * bb.hp_recovery_per_sec_ratio, a.defId);
+    assert.equal(far.buffs.some((b) => b.key === z.key), false);
+    assert.equal(heals(h, u, () => true).length, 0);
     mute(h, u);
     h.run(z.dur);
     assert.ok(!u.mem.zones.includes(z), 'expired');
@@ -1030,24 +1046,76 @@ test('引星棘刺 S1 度算浪波: latest deployed ally in range gets the guard
   }
 });
 
-test('引星棘刺 S1: full-HP allies and real summons trigger without enemies, latest deployment wins', () => {
-  for (const id of pair('15')) for (const tokenId of ['token_10028_vigil_wolf', 'token_10030_mlyss_wtrman']) {
-    const h = run({ units: [entry(id, 'skchr_thorn2_1', { row: 10, col: 3 })], enemies: [] });
+test('引星棘刺 S1 度算浪波: two alchemy units on one ally add their DEF (PRTS 备注 「效果均可叠加」, GitHub #388)', () => {
+  // two 引星棘刺 (a normal and an elite: +60 and +75) throw at the same lowest-HP ally; one shared buff key used to let the
+  // last unit's DEF replace the other's (+75 instead of +135) while both heals already landed
+  const [na, el] = pair('15');
+  const h = run({
+    defs: { chess: { t_low: ally('t_low', { stats: { def: 100 } }) } },
+    units: [entry(na, 'skchr_thorn2_1', { row: 10, col: 3 }), entry(el, 'skchr_thorn2_1', { row: 11, col: 3 }), { chessId: 't_low', row: 10, col: 5 }],
+    enemies: [],
+  });
+  const a = sel(h, na, 'skchr_thorn2_1'), b = sel(h, el, 'skchr_thorn2_1');
+  const low = h.unit('t_low');
+  h.step();
+  low.hp = low.s.maxHp * 0.3;
+  for (const u of [a, b]) u.skill.gainSp(1000);
+  h.runUntil(() => [a, b].every((u) => (u.mem.zones || []).some((z) => z.type === 'guard')), 10);
+  h.run(1.1);
+  const [za, zb] = [a, b].map((u) => u.mem.zones.find((z) => z.type === 'guard'));
+  assert.deepEqual([za.r, za.c, zb.r, zb.c], [10, 5, 10, 5], 'both on the lowest-HP ally');
+  assert.equal(low.s.def, 100 + bbOf(a).def + bbOf(b).def, '+60 +75');
+  assert.ok(low.hp > low.s.maxHp * 0.3, 'and they restore its HP');
+  // one unit runs out: the other's DEF stays
+  mute(h, a); mute(h, b);
+  h.run(Math.max(0, za.dur - za.t) + 0.6);
+  assert.ok(!a.mem.zones.includes(za) && b.mem.zones.includes(zb), 'the elite\'s unit (7 s) outlasts the normal one (6 s)');
+  assert.equal(low.s.def, 100 + bbOf(b).def, 'its DEF stays alone');
+  h.run(zb.dur);
+  assert.equal(low.s.def, 100, 'no DEF bonus afterwards');
+  done(h);
+});
+
+test('引星棘刺 S1 度算浪波: at an HP-ratio tie the unit goes to the latest deployed ally (PRTS 备注 「优先选择生命比例最低>最晚部署的我方单位」)', () => {
+  for (const id of pair('15')) {
+    const h = run({
+      defs: { chess: { t_first: ally('t_first'), t_last: ally('t_last') } },
+      // t_first stands nearer to her, t_last deploys after it (until 0.2.2 a tie went to more blocking, then the nearer)
+      units: [entry(id, 'skchr_thorn2_1', { row: 10, col: 3 }), { chessId: 't_first', row: 11, col: 4 }, { chessId: 't_last', row: 9, col: 5 }],
+      enemies: [],
+    });
     const u = sel(h, id, 'skchr_thorn2_1');
-    // Exclude the caster's own tile so the test requires another friendly unit.
-    u.skill.def = { ...u.skill.def, rangeGrid: [[0, 2]] };
+    const first = h.unit('t_first'), last = h.unit('t_last');
+    h.step();
+    assert.ok(last.deploySeq > first.deploySeq, 't_last is the later deployment');
+    first.hp = first.s.maxHp * 0.5; last.hp = last.s.maxHp * 0.5;
+    cast(h, u);
+    const z = u.mem.zones.find((x) => x.type === 'guard');
+    assert.deepEqual([z.r, z.c], [9, 5], 'the latest deployed of the two at 50 %');
+    // the lowest ratio still comes first
+    last.hp = last.s.maxHp; first.hp = first.s.maxHp * 0.4;
+    const n0 = u.skill.activations;
     u.skill.gainSp(1000);
-    h.run(4);
-    assert.equal(u.skill.activations, 0, 'no ally in skill range');
-    const outside = h.b.spawnToken(u, tokenId, 10, 7, { anySource: true });
-    assert.ok(outside);
-    h.run(1);
-    assert.equal(u.skill.activations, 0, 'out-of-range summons do not trigger');
-    const token = h.b.spawnToken(u, tokenId, 10, 5, { anySource: true });
-    assert.ok(token);
-    assert.equal(token.hp, token.s.maxHp);
-    assert.ok(h.runUntil(() => u.skill.activations > 0, 3), 'full-HP summon triggers without enemies');
-    assert.deepEqual([u.mem.zones.at(-1).r, u.mem.zones.at(-1).c], [token.tileR, token.tileC]);
+    assert.ok(h.runUntil(() => u.skill.activations > n0, 15), 'cast again');
+    const z2 = u.mem.zones.filter((x) => x.type === 'guard').at(-1);
+    assert.deepEqual([z2.r, z2.c], [11, 4], 'a lower ratio beats a later deployment');
+    done(h);
+  }
+});
+
+test('引星棘刺 S1 度算浪波 (AUTO): fires as soon as its SP is full, no enemy needed (GitHub #124)', () => {
+  for (const id of pair('15')) {
+    const h = run({
+      defs: { chess: { t_low: ally('t_low') } },
+      units: [entry(id, 'skchr_thorn2_1', { row: 10, col: 3 }), { chessId: 't_low', row: 10, col: 5 }],
+      enemies: [],
+    });
+    const u = sel(h, id, 'skchr_thorn2_1');
+    h.step();
+    assert.equal(h.b.enemies.length, 0, 'no enemy on the field');
+    const need = u.skill.spCost - u.skill.sp;
+    h.run(need + 0.5);
+    assert.ok((u.mem.zones || []).some((z) => z.type === 'guard'), `cast within ${need.toFixed(1)} s of SP filling, no enemy around`);
     done(h);
   }
 });

@@ -26,6 +26,7 @@ import { html } from './components.js';
 import { GIcon } from './gameComponents.js';
 import { data, useData, localAsset, artUrls, nextArtUrl } from '../data.js';
 import { loadPref, savePref } from '../store.js';
+import { t } from '../../../shared/i18n.js';
 
 const cx = (...p) => p.flat().filter(Boolean).join(' ');
 
@@ -197,8 +198,8 @@ export function EmoteBubble({ id, text, class: cls, ttl = EMOTE_BUBBLE_MS, at })
   const bg = emoteUiSprite('emoji_bubble_bkg');
   const e = emoteInfo(id);
   const style = [`--ebubble-ttl:${life}ms`, age && `--ebubble-age:${Math.round(age)}ms`, bg && `--ebubble-bg:url("${bg}")`].filter(Boolean).join(';');
-  return html`<div class=${cx('ebubble', isText && 'ebubble--chat', !isText && bg && 'has-sprite', cls)} style=${style} role=${isText ? 'status' : 'img'}
-    aria-label=${isText ? undefined : e ? e.label : '表情'} data-emote=${e ? e.id : ''}>
+  return html`<div class=${cx('ebubble', isText && 'ebubble--chat', bg && !isText && 'has-sprite', cls)} style=${style} role=${isText ? 'status' : 'img'}
+    aria-label=${isText ? text : e ? t(e.label) : t('表情')} data-emote=${e ? e.id : ''}>
     ${isText ? html`<span class="ebubble__text">${text}</span>` : html`<span class="ebubble__icon"><${EmoteArt} id=${id} /></span>`}
   </div>`;
 }
@@ -335,36 +336,29 @@ export function EmoteWheel({ onSend, onChat, open, onToggle, disabled = false, c
     <button type="button" class=${cx('ewheel__btn', btnSprite && 'has-sprite', open && 'is-on', cooling && 'is-cooling')}
       style=${btnSprite ? `--ewheel-btn:url("${btnSprite}")` : ''} onClick=${() => onToggle(!open)}
       aria-expanded=${open ? 'true' : 'false'} aria-haspopup="dialog" disabled=${disabled || cooling}>
-      ${btnSprite ? null : html`<${GIcon} name="emote" />`}<span class="ewheel__label">交流</span>
+      ${btnSprite ? null : html`<${GIcon} name="emote" />`}<span class="ewheel__label">${t('交流')}</span>
     </button>
-    ${open ? html`<div class=${cx('ewheel__panel', mode === 'text' && 'echat', mode !== 'text' && panelBg && 'has-sprite', cellBg && 'has-cell')} style=${panelStyle} role="dialog" aria-label="交流">
-      ${onChat ? html`<div class="echat__tabs" role="tablist" aria-label="交流方式">
-        <button type="button" role="tab" aria-selected=${mode === 'emote'} onClick=${() => setMode('emote')}>表情</button>
-        <button type="button" role="tab" aria-selected=${mode === 'text'} onClick=${() => setMode('text')}>文字</button>
-      </div>` : null}
-      ${mode === 'text' ? html`<form class="echat__form" onSubmit=${sendChat}>
-        <label for="match-chat">发送给全体队友</label>
-        <input id="match-chat" type="text" value=${draft} maxlength=${CHAT_MAX_LENGTH} placeholder="输入消息…" autocomplete="off"
-          aria-label="聊天消息" disabled=${disabled || sending} onInput=${(e) => setDraft(e.currentTarget.value)}
-          onCompositionStart=${() => { composing.current = true; }} onCompositionEnd=${() => { composing.current = false; }}
-          onKeyDown=${(e) => { if (e.key === 'Enter' && (e.isComposing || composing.current || e.keyCode === 229)) e.preventDefault(); }} />
-        <div class="echat__footer"><span>${draft.length}/${CHAT_MAX_LENGTH}</span>
-          <button type="submit" disabled=${disabled || sending || !normalizeChat(draft)}>${sending ? '发送中…' : '发送'}</button></div>
+    ${open ? html`<div class=${cx('ewheel__panel', mode === 'chat' && 'echat', mode !== 'chat' && panelBg && 'has-sprite', cellBg && 'has-cell')} style=${panelStyle} role="dialog" aria-label=${t('交流')}>
+      ${onChat ? html`<div class="echat__tabs"><button type="button" onClick=${() => setMode('emote')}>${t('表情')}</button><button type="button" onClick=${() => setMode('chat')}>${t('文字')}</button></div>` : null}
+      ${mode === 'chat' && onChat ? html`<form class="echat__form" onSubmit=${sendChat}>
+        <input value=${draft} maxLength=${CHAT_MAX_LENGTH} aria-label=${t('消息')} onInput=${(e) => setDraft(e.currentTarget.value)}
+          onCompositionStart=${() => { composing.current = true; }} onCompositionEnd=${() => { composing.current = false; }} />
+        <div class="echat__footer"><span>${draft.length}/${CHAT_MAX_LENGTH}</span><button type="submit" disabled=${disabled || sending || !normalizeChat(draft)}>${t('发送')}</button></div>
       </form>` : html`<div class="ewheel__viewport" onPointerDown=${onPointerDown} onPointerMove=${onPointerMove}
         onPointerUp=${(e) => endDrag(e, false)} onPointerCancel=${(e) => endDrag(e, true)} onWheel=${onWheel}>
         <div key=${theme.themeId} class=${cx('ewheel__page', dir > 0 && 'is-from-right', dir < 0 && 'is-from-left', dx !== 0 && 'is-dragging')}
-          style=${dx ? `transform:translateX(${dx}px)` : ''} role="group" aria-label=${theme.name} data-theme=${theme.themeId}>
-          ${theme.emotes.map((e) => html`<button key=${e.id} type="button" class="ewheel__item" data-emote=${e.id} aria-label=${e.label}
+          style=${dx ? `transform:translateX(${dx}px)` : ''} role="group" aria-label=${t(theme.name)} data-theme=${theme.themeId}>
+          ${theme.emotes.map((e) => html`<button key=${e.id} type="button" class="ewheel__item" data-emote=${e.id} aria-label=${t(e.label)}
               disabled=${cooling || disabled} onClick=${() => send(e.id)}>
             <${EmoteArt} id=${e.id} />
           </button>`)}
         </div>
       </div>
-      <button type="button" class="ewheel__nav is-prev" aria-label="上一组表情" disabled=${page <= 0} onClick=${() => go(page - 1)}><${GIcon} name="chevronLeft" /></button>
-      <button type="button" class="ewheel__nav is-next" aria-label="下一组表情" disabled=${page >= EMOTE_THEMES.length - 1} onClick=${() => go(page + 1)}><${GIcon} name="chevronRight" /></button>
-      <div class="ewheel__dots" role="tablist" aria-label="表情主题">
-        ${EMOTE_THEMES.map((t, i) => html`<button key=${t.themeId} type="button" role="tab" class=${cx('ewheel__dot', i === page && 'is-on')}
-          aria-selected=${i === page ? 'true' : 'false'} aria-label=${`${t.name} ${i + 1}/${EMOTE_THEMES.length}`} onClick=${() => go(i)}></button>`)}
+      <button type="button" class="ewheel__nav is-prev" aria-label=${t('上一组表情')} disabled=${page <= 0} onClick=${() => go(page - 1)}><${GIcon} name="chevronLeft" /></button>
+      <button type="button" class="ewheel__nav is-next" aria-label=${t('下一组表情')} disabled=${page >= EMOTE_THEMES.length - 1} onClick=${() => go(page + 1)}><${GIcon} name="chevronRight" /></button>
+      <div class="ewheel__dots" role="tablist" aria-label=${t('表情主题')}>
+        ${EMOTE_THEMES.map((th, i) => html`<button key=${th.themeId} type="button" role="tab" class=${cx('ewheel__dot', i === page && 'is-on')}
+          aria-selected=${i === page ? 'true' : 'false'} aria-label=${`${t(th.name)} ${i + 1}/${EMOTE_THEMES.length}`} onClick=${() => go(i)}></button>`)}
       </div>
       `}
     </div>` : null}

@@ -2,7 +2,7 @@
 //
 // Exports: html (bound htm), Icon, Button, Panel, MicroLabel, Chevrons, HexBadge, TierChip,
 // BondDisc, SevenSeg, Countdown, Modal, confirmDialog/alertDialog + DialogHost, Tooltip +
-// TooltipLayer, ProgressBar, Tabs, Spinner, AvatarFrame, PhaseBanner, PingPill, DifficultyTag,
+// TooltipLayer, ProgressBar, Tabs, Spinner, AvatarFrame, PhaseBanner, ResultDialog, PingPill, DifficultyTag,
 // DifficultyIcon, TextField, UiHosts (mount once: dialogs + tooltips), useTicker, secondsLeft/hasDeadline,
 // roman(), doctorNo().
 //
@@ -15,6 +15,7 @@ import { h, Fragment } from '../../vendor/preact.module.js';
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from '../../vendor/hooks.module.js';
 import htm from '../../vendor/htm.module.js';
 import { DIFFICULTY_NAMES, DIFFICULTY_COLORS } from '../../../shared/constants.js';
+import { t } from '../../../shared/i18n.js';
 import { serverNow } from '../store.js';
 import { data, useData, localAsset } from '../data.js';
 import { uiUrl } from './assetUrls.js';
@@ -54,6 +55,8 @@ export const ICONS = {
   users: { d: 'M9 4a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7zM2 20a7 6.5 0 0 1 14 0zM16.5 5a3 3 0 1 1 0 6 3 3 0 0 1 0-6zm.9 8.1A6.5 6 0 0 1 22.5 20H18a8.6 8 0 0 0-2.4-6.1 6 6 0 0 1 1.8-.8z' },
   rook: { d: 'M5 3h3v2h2V3h4v2h2V3h3v5l-2 2v7l2 2v2H5v-2l2-2v-7L5 8z' },
   signal: { d: 'M2 17h3v4H2zm6-4h3v8H8zm6-4h3v12h-3zm6-4h3v16h-3z' },
+  // 统计 (the stats page's entry): three columns on a baseline — apart from `signal`, the ping bars
+  chart: { d: 'M4 12h4v7H4zm6-6h4v13h-4zm6 3h4v10h-4zM3 20h18v2H3z' },
   refresh: { d: 'M12 4a8 8 0 0 1 7.4 5H17v2h6V5h-2v2.3A10 10 0 0 0 2 12h2a8 8 0 0 1 8-8zm0 16a8 8 0 0 1-7.4-5H7v-2H1v6h2v-2.3A10 10 0 0 0 22 12h-2a8 8 0 0 1-8 8z' },
   snow: { d: 'M11 2h2v4.2l2.3-2.3 1.4 1.4-3.7 3.7v2h2l3.7-3.7 1.4 1.4-2.3 2.3H22v2h-4.2l2.3 2.3-1.4 1.4-3.7-3.7h-2v2l3.7 3.7-1.4 1.4-2.3-2.3V22h-2v-4.2l-2.3 2.3-1.4-1.4 3.7-3.7v-2H9l-3.7 3.7-1.4-1.4L6.2 13H2v-2h4.2L3.9 8.7l1.4-1.4L9 11h2V9L7.3 5.3l1.4-1.4L11 6.2z' },
   chevronRight: { d: 'M8.6 5 7.2 6.4 12.8 12l-5.6 5.6L8.6 19l7-7z' },
@@ -66,12 +69,15 @@ export const ICONS = {
   info: { d: 'M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm-1 8v7h2v-7zm0-3v2h2V7z', eo: true },
   warn: { d: 'M12 2 1 21h22zm-1 7v6h2V9zm0 7.5v2h2v-2z', eo: true },
   play: { d: 'M7 4v16l13-8z' },
+  mic: { d: 'M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21H8v2h8v-2h-3v-3.1A7 7 0 0 0 19 11z' },
   edit: { d: 'M3 17.2V21h3.8l11-11-3.8-3.8zM20.7 7.1a1 1 0 0 0 0-1.4l-2.4-2.4a1 1 0 0 0-1.4 0l-1.8 1.8 3.8 3.8z' },
   sword: { d: 'M20 3h1v4L10.4 17.6l1.4 1.4-1.4 1.4-2.1-2.1-3.5 3.5-1.4-1.4 3.5-3.5L4.8 14.8l1.4-1.4 1.4 1.4L18 4z' },
   shield: { d: 'M12 2 4 5v6c0 5 3.4 9.3 8 11 4.6-1.7 8-6 8-11V5z' },
   wifiOff: { d: 'M2 17h3v4H2zm6-4h3v8H8zm6-4h3v12h-3zm6-4h3v16h-3zM2.4 1 23 21.6 21.6 23 1 2.4z' },
   expand: { d: 'M3 3h7v2H5v5H3zm11 0h7v7h-2V5h-5zM3 14h2v5h5v2H3zm16 0h2v7h-7v-2h5z' },
   collapse: { d: 'M8 3h2v7H3V8h5zm6 0h2v5h5v2h-7zM3 14h7v7H8v-5H3zm11 0h7v2h-5v5h-2z' },
+  // 添加到桌面 (add to home screen): a house outline with a + inside
+  homePlus: { d: 'M12 2 22 10.5V21H2V10.5zm0 2.6-8 6.8V19h16v-7.6zM11 10h2v2.5h2.5v2H13V17h-2v-2.5H8.5v-2H11z', eo: true },
   rotate: { d: 'M7 2h8a2 2 0 0 1 2 2v7h-2V4H7v16h4v2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 12h5a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2zm0 2v4h5v-4z', eo: true },
   book: { d: 'M2 4h7.5A3.5 3.5 0 0 1 12 5.1 3.5 3.5 0 0 1 14.5 4H22v16h-7.5a1.5 1.5 0 0 0-1.5 1.5h-2A1.5 1.5 0 0 0 9.5 20H2zm2 2v12h5.5c.5 0 1 .1 1.5.3V7.5A1.5 1.5 0 0 0 9.5 6zm10.5 0A1.5 1.5 0 0 0 13 7.5v10.8c.5-.2 1-.3 1.5-.3H20V6z', eo: true },
   // 观战 (spectator seats; the same eye as gameComponents.js GIcon 'eye')
@@ -192,12 +198,12 @@ export function tierChipUrl(t) {
  * @param {{ tier: number, golden?: boolean, size?: 'sm'|'md'|'lg', class?: string }} props
  */
 export function TierChip({ tier, golden = false, size = 'md', class: cls }) {
-  const t = Math.max(1, Math.min(6, Number(tier) | 0 || 1));
-  const src = tierChipUrl(t);
+  const n = Math.max(1, Math.min(6, Number(tier) | 0 || 1));
+  const src = tierChipUrl(n);
   const [bad, setBad] = useState(null);
   const img = !!src && bad !== src;
-  return html`<span class=${cx('tier', `tier--${t}`, `tier--${size}`, golden && 'tier--golden', img && 'tier--img', cls)} aria-label=${`${t}阶`}>
-    ${img ? html`<img src=${src} alt="" draggable=${false} onError=${() => setBad(src)} />` : roman(t)}
+  return html`<span class=${cx('tier', `tier--${n}`, `tier--${size}`, golden && 'tier--golden', img && 'tier--img', cls)} aria-label=${t('{tier}阶', { tier: n })}>
+    ${img ? html`<img src=${src} alt="" draggable=${false} onError=${() => setBad(src)} />` : roman(n)}
   </span>`;
 }
 
@@ -238,7 +244,7 @@ export function BondDisc({
           : html`<span class="bond__glyph">${glyph}</span>`}
       </span>
       ${stack != null ? html`<span class="bond__count">${stack}</span>` : null}
-      ${disabled ? html`<span class="bond__ban" aria-label="禁用"><${Icon} name="close" /></span>` : null}
+      ${disabled ? html`<span class="bond__ban" aria-label=${t('禁用')}><${Icon} name="close" /></span>` : null}
     </span>
     ${showName && name ? html`<span class="bond__name">${name}</span>` : null}
   <//>`;
@@ -371,7 +377,7 @@ export function Countdown({ deadline, seconds, total, warnAt = 10, label = 'COUN
 
   // untimed phase: no timer on screen (hooks above run unconditionally, so the component may toggle freely)
   if (remain == null) return null;
-  return html`<div class=${cx('countdown', `countdown--${size}`, warn && 'is-warn', cls)} role="timer" aria-label=${remain == null ? '无倒计时' : `剩余${remain}秒`}>
+  return html`<div class=${cx('countdown', `countdown--${size}`, warn && 'is-warn', cls)} role="timer" aria-label=${remain == null ? t('无倒计时') : t('剩余{remain}秒', { remain })}>
     <div class="countdown__main">
       <${SevenSeg} text=${text} tone=${warn ? 'orange' : 'mint'} flicker=${warn && remain > 0} />
       ${label ? html`<span class="countdown__label">${label}</span>` : null}
@@ -384,44 +390,67 @@ export function Countdown({ deadline, seconds, total, warnAt = 10, label = 'COUN
 
 // ---- Modal & dialogs ---------------------------------------------------------------------------
 
-const modalStack = []; // open modals, topmost last: only the topmost reacts to Escape
+const modalStack = []; // open modals, topmost last: only the topmost handles keyboard focus / Escape
 
 /**
  * Modal dialog (declarative). Esc / backdrop click call onClose.
  * @param {{ open: boolean, title?: any, micro?: string, tone?: string, onClose?: Function, actions?: any,
- *   width?: string, closeOnBackdrop?: boolean, class?: string, children?: any }} props
+ *   width?: string, closeOnBackdrop?: boolean, class?: string, veilClass?: string, children?: any }} props
+ * `veilClass` styles the backdrop itself (e.g. a dialog that dims the field without blurring it).
  */
-export function Modal({ open, title, micro, tone = 'mint', onClose, actions, width, closeOnBackdrop = true, class: cls, children }) {
+export function Modal({ open, title, micro, tone = 'mint', onClose, actions, width, closeOnBackdrop = true, class: cls, veilClass, children }) {
   const boxRef = useRef(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return undefined;
     const token = {};
     modalStack.push(token);
     const prevFocus = typeof document !== 'undefined' ? document.activeElement : null;
+    const box = boxRef.current;
+    // The independent guide can open above SettingsModal (its z-index is higher than --z-modal).
+    const topmost = () => modalStack[modalStack.length - 1] === token && !document.querySelector('.guide');
+    const available = (el) => !el.matches(':disabled') && !el.closest('[inert]') && el.getClientRects().length > 0
+      && getComputedStyle(el).visibility !== 'hidden';
+    const tabbable = () => [...box.querySelectorAll('button, [href], input, select, textarea, [tabindex], summary')]
+      .filter((el) => el.tabIndex >= 0 && available(el));
+    const focusFirst = () => (tabbable()[0] || box).focus();
     const onKey = (e) => {
-      if (e.key !== 'Escape' || modalStack[modalStack.length - 1] !== token || !closeRef.current) return;
-      e.stopPropagation();
-      closeRef.current();
+      if (!topmost()) return;
+      if (e.key === 'Escape' && closeRef.current) {
+        e.stopPropagation();
+        closeRef.current();
+      } else if (e.key === 'Tab') {
+        const els = tabbable();
+        const first = els[0] || box, last = els[els.length - 1] || box;
+        if (!els.includes(document.activeElement) || document.activeElement === (e.shiftKey ? first : last)) {
+          e.preventDefault();
+          (e.shiftKey ? last : first).focus();
+        }
+      }
+    };
+    const onFocus = (e) => {
+      if (topmost() && !box.contains(e.target)) focusFirst();
     };
     window.addEventListener('keydown', onKey);
-    const t = setTimeout(() => {
-      const el = boxRef.current?.querySelector('[data-autofocus]') || boxRef.current?.querySelector('button, input');
-      el?.focus?.();
-    }, 30);
+    window.addEventListener('focusin', onFocus);
+    const autofocus = box.querySelector('[data-autofocus]');
+    if (topmost()) {
+      if (autofocus && available(autofocus)) autofocus.focus();
+      else focusFirst();
+    }
     return () => {
       window.removeEventListener('keydown', onKey);
-      clearTimeout(t);
+      window.removeEventListener('focusin', onFocus);
       const i = modalStack.indexOf(token);
       if (i >= 0) modalStack.splice(i, 1);
       prevFocus?.focus?.();
     };
   }, [open]);
   if (!open) return null;
-  return html`<div class="modal" role="presentation"
+  return html`<div class=${cx('modal', veilClass)} role="presentation"
       onMouseDown=${(e) => { if (closeOnBackdrop && e.target === e.currentTarget && onClose) onClose(); }}>
-    <div ref=${boxRef} class=${cx('modal__box', 'brackets', `modal__box--${tone}`, cls)} role="dialog" aria-modal="true"
+    <div ref=${boxRef} class=${cx('modal__box', 'brackets', `modal__box--${tone}`, cls)} role="dialog" aria-modal="true" tabindex="-1"
          style=${width ? `width:${width}` : undefined}>
       <div class="modal__stripe" aria-hidden="true"></div>
       ${title || micro ? html`<header class="modal__head">
@@ -487,7 +516,7 @@ export function DialogHost() {
   }, []);
   const d = dialogs[0];
   if (!d) return null;
-  const { title = '确认', text, okText = '确认', cancelText = '取消', tone, danger, micro = 'CONFIRMATION' } = d.opts;
+  const { title = t('确认'), text, okText = t('确认'), cancelText = t('取消'), tone, danger, micro = 'CONFIRMATION' } = d.opts;
   const isConfirm = d.kind === 'confirm';
   // Enter confirms unless a specific button has focus (then the native click decides).
   const onKey = (e) => {
@@ -506,24 +535,27 @@ export function DialogHost() {
 
 // ---- Tooltip -----------------------------------------------------------------------------------
 
-let tipState = null; // { id, content, rect, placement }
+let tipState = null; // { id, content, aside, rect, placement }
 let tipSeq = 0;
 const tipListeners = new Set();
 const setTip = (s) => { tipState = s; for (const fn of [...tipListeners]) fn(); };
 
 /**
  * Hover/focus tooltip around its children. Content renders in <TooltipLayer/> (fixed, viewport-clamped).
- * @param {{ text: any, placement?: 'top'|'bottom', delay?: number, block?: boolean, class?: string, children?: any }} props
+ * `aside`: a second section in the same clamped, scrollable box; stacked on narrow screens.
+ * @param {{ text: any, aside?: any, placement?: 'top'|'bottom', delay?: number, block?: boolean, class?: string, children?: any }} props
  */
 const TOUCH_TIP_MS = 450;
 
-export function Tooltip({ text, placement = 'top', delay = 120, block = false, class: cls, children }) {
+export function Tooltip({ text, aside = null, placement = 'top', delay = 120, block = false, class: cls, children }) {
   const ref = useRef(null);
   const idRef = useRef(0);
   const timer = useRef(null);
   const textRef = useRef(text);
+  const asideRef = useRef(aside);
   const pressed = useRef(false); // pointer pressed inside: the focus that follows is not a keyboard focus
   textRef.current = text;
+  asideRef.current = aside;
   if (!idRef.current) idRef.current = ++tipSeq;
   const show = () => {
     clearTimeout(timer.current);
@@ -532,7 +564,8 @@ export function Tooltip({ text, placement = 'top', delay = 120, block = false, c
       const el = ref.current;
       const content = textRef.current; // the text of the render current when the delay ends (a click may change it)
       if (!el || !el.isConnected || content == null || content === '') return;
-      setTip({ id: idRef.current, content, rect: el.getBoundingClientRect(), placement });
+      setTip({ id: idRef.current, content, aside: asideRef.current, rect: el.getBoundingClientRect(), placement,
+        hold: () => clearTimeout(timer.current), hide });
     }, delay);
   };
   const hide = () => {
@@ -542,7 +575,7 @@ export function Tooltip({ text, placement = 'top', delay = 120, block = false, c
   // A click hides the tooltip until the pointer leaves: the focus it gives the button must not bring it back
   // (with the text of the click's closure) over whatever the click opened. Keyboard focus still shows it.
   // Touch: a tap never shows it (the compatibility mouseenter that follows a tap is ignored); a long press
-  // (≥ 450 ms) does, and it goes away shortly after the finger lifts.
+  // (≥ 450 ms) does. Ordinary tips expire after release; compound lists stay open for scrolling until dismissed.
   const touchAt = useRef(0);
   const longTimer = useRef(null);
   const onPointerDown = (e) => {
@@ -558,18 +591,24 @@ export function Tooltip({ text, placement = 'top', delay = 120, block = false, c
     if (!e || e.pointerType === 'mouse') return;
     touchAt.current = Date.now();
     clearTimeout(longTimer.current);
-    if (tipState?.id === idRef.current) { clearTimeout(timer.current); timer.current = setTimeout(hide, 1600); }
+    if (tipState?.id === idRef.current && !asideRef.current) { clearTimeout(timer.current); timer.current = setTimeout(hide, 1600); }
   };
   const onMouseEnter = () => { if (Date.now() - touchAt.current > 900) show(); };
   const onFocusIn = () => { if (!pressed.current && Date.now() - touchAt.current > 900) show(); };
-  const onLeave = () => { pressed.current = false; if (Date.now() - touchAt.current > 900) hide(); };
+  const onLeave = () => {
+    pressed.current = false;
+    if (Date.now() - touchAt.current > 900) {
+      if (asideRef.current) { clearTimeout(timer.current); timer.current = setTimeout(hide, 250); }
+      else hide();
+    }
+  };
   useEffect(() => () => { clearTimeout(longTimer.current); hide(); }, []);
   // Keep the visible tooltip's content fresh when `text` changes (and hide it when text goes away).
   useEffect(() => {
     if (tipState?.id !== idRef.current) return;
     if (text == null || text === '') setTip(null);
-    else setTip({ ...tipState, content: text });
-  }, [text]);
+    else setTip({ ...tipState, content: text, aside: asideRef.current });
+  }, [text, aside]);
   return html`<span ref=${ref} class=${cx('tt-anchor', block && 'tt-anchor--block', cls)}
       onMouseEnter=${onMouseEnter} onMouseLeave=${onLeave} onFocusIn=${onFocusIn} onFocusOut=${onLeave} onPointerDown=${onPointerDown}
       onPointerUp=${onPointerEnd} onPointerCancel=${onPointerEnd} onContextMenu=${(e) => { if (Date.now() - touchAt.current < 900) e.preventDefault(); }}>
@@ -584,7 +623,12 @@ export function TooltipLayer() {
   const [pos, setPos] = useState(null);
   useEffect(() => {
     tipListeners.add(force);
-    return () => tipListeners.delete(force);
+    const outside = (e) => { if (tipState?.aside && !e.target?.closest?.('.tooltip')) tipState.hide?.(); };
+    const escape = (e) => { if (e.key === 'Escape') tipState?.hide?.(); };
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('keydown', escape);
+    window.addEventListener('resize', force);
+    return () => { tipListeners.delete(force); document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape); window.removeEventListener('resize', force); };
   }, []);
   useLayoutEffect(() => {
     const el = boxRef.current;
@@ -600,13 +644,21 @@ export function TooltipLayer() {
     if (place === 'bottom' && top + b.height > vh - m) { place = 'top'; top = Math.max(m, r.top - b.height - m); }
     let left = r.left + r.width / 2 - b.width / 2;
     left = Math.max(m, Math.min(vw - b.width - m, left));
+    top = Math.max(m, Math.min(vh - b.height - m, top));
     const next = { top: Math.round(top), left: Math.round(left), place, id: tipState.id };
     if (!pos || pos.top !== next.top || pos.left !== next.left || pos.id !== next.id || pos.place !== next.place) setPos(next);
   });
   if (!tipState) return null;
   const ready = pos && pos.id === tipState.id;
-  return html`<div ref=${boxRef} class=${cx('tooltip', ready && 'is-shown', ready && `tooltip--${pos.place}`)} role="tooltip"
-    style=${ready ? `top:${pos.top}px;left:${pos.left}px` : 'top:-9999px;left:-9999px'}>${tipState.content}</div>`;
+  const hasAside = tipState.aside != null && tipState.aside !== '';
+  const off = 'top:-9999px;left:-9999px';
+  return html`<div ref=${boxRef} class=${cx('tooltip', hasAside && 'tooltip--compound', ready && 'is-shown', ready && `tooltip--${pos.place}`)} role="tooltip"
+    tabIndex=${hasAside ? 0 : undefined} onMouseEnter=${() => tipState?.hold?.()} onMouseLeave=${() => tipState?.hide?.()}
+    onFocusIn=${() => tipState?.hold?.()} onPointerDown=${() => tipState?.hold?.()}
+    onFocusOut=${(e) => { if (!e.currentTarget.contains(e.relatedTarget)) tipState?.hide?.(); }}
+    style=${ready ? `top:${pos.top}px;left:${pos.left}px` : off}>
+    ${hasAside ? html`<div class="tooltip__main">${tipState.content}</div><div class="tooltip--aside">${tipState.aside}</div>` : tipState.content}
+  </div>`;
 }
 
 // ---- ProgressBar, Tabs, Spinner ----------------------------------------------------------------
@@ -668,7 +720,7 @@ export function Spinner({ size = 'md', label, tone = 'mint', class: cls }) {
       <polygon class="spinner__track" points="25,3 44,14 44,36 25,47 6,36 6,14" />
       <polygon class="spinner__arc" points="25,3 44,14 44,36 25,47 6,36 6,14" />
     </svg>
-    ${label ? html`<span class="spinner__label">${label}</span>` : html`<span class="sr-only">加载中</span>`}
+    ${label ? html`<span class="spinner__label">${label}</span>` : html`<span class="sr-only">${t('加载中')}</span>`}
   </span>`;
 }
 
@@ -693,8 +745,8 @@ export function AvatarFrame({ name = '', src, size = 'md', seat = 0, host, bot, 
         : bot ? html`<${Icon} name="robot" class="avatar__bot" />`
         : html`<span class="avatar__glyph">${glyph}</span>`}
     </div>
-    ${host ? html`<span class="avatar__badge avatar__badge--host" title="创建者"><${Icon} name="crown" /></span>` : null}
-    ${self ? html`<span class="avatar__badge avatar__badge--self" title="你"><${Icon} name="user" /></span>` : null}
+    ${host ? html`<span class="avatar__badge avatar__badge--host" title=${t('创建者')}><${Icon} name="crown" /></span>` : null}
+    ${self ? html`<span class="avatar__badge avatar__badge--self" title=${t('你')}><${Icon} name="user" /></span>` : null}
     ${bot && !empty ? html`<span class="avatar__tag">AI</span>` : null}
   </div>`;
 }
@@ -730,6 +782,39 @@ export function PhaseBanner({ title, sub, micro, tone = 'mint', mode = 'inline',
   </div>`;
 }
 
+/**
+ * The round's result box (the official round result dialog, shown at settlement; GitHub #235, PR #112 by @Convey123):
+ * a centred framed plate — tone-coloured frame and corner ticks, chevrons either side of the title — that opens, holds
+ * `duration` ms and closes by itself. Purely presentational: ui/gameLogic/phases.js (roundResultBox / uniteResultBox /
+ * battleResultBox) picks the words, screens/game.js the moment (SETTLE). `pointer-events: none`: it never takes a click.
+ * @param {{ title: any, sub?: any, micro?: string, tone?: 'mint'|'orange'|'red', duration?: number, onDone?: Function }} props
+ *   duration (ms) > 0 auto-hides then calls onDone. Re-key to replay.
+ */
+export function ResultDialog({ title, sub, micro, tone = 'mint', duration = 2800, onDone }) {
+  const [leaving, setLeaving] = useState(false);
+  const [gone, setGone] = useState(false);
+  useEffect(() => {
+    if (!(duration > 0)) return undefined;
+    const t1 = setTimeout(() => setLeaving(true), duration);
+    const t2 = setTimeout(() => { setGone(true); onDone?.(); }, duration + 300);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [duration]);
+  if (gone) return null;
+  return html`<div class=${cx('rdialog', `rdialog--${tone}`, leaving && 'is-leaving')} role="status" aria-live="polite">
+    <div class="rdialog__box">
+      <span class="rdialog__tick rdialog__tick--tl"></span><span class="rdialog__tick rdialog__tick--tr"></span>
+      <span class="rdialog__tick rdialog__tick--bl"></span><span class="rdialog__tick rdialog__tick--br"></span>
+      ${micro ? html`<span class="rdialog__micro">${micro}</span>` : null}
+      <div class="rdialog__row">
+        <${Chevrons} count=${3} tone=${tone} class="rdialog__chev" />
+        <span class="rdialog__title">${title}</span>
+        <${Chevrons} count=${3} tone=${tone} dir="left" class="rdialog__chev" />
+      </div>
+      ${sub ? html`<span class="rdialog__sub">${sub}</span>` : null}
+    </div>
+  </div>`;
+}
+
 // ---- domain helpers ----------------------------------------------------------------------------
 
 /**
@@ -753,7 +838,7 @@ export function doctorNo(id) {
 export function PingPill({ ms, online = true, class: cls }) {
   const ok = online && Number.isFinite(ms);
   const tier = !ok ? 'off' : ms < 60 ? 'low' : ms < 200 ? 'medium' : 'high';
-  return html`<span class=${cx('ping', `ping--${tier}`, cls)} title=${ok ? `当前延迟 ${ms}ms` : '未连接'}>
+  return html`<span class=${cx('ping', `ping--${tier}`, cls)} title=${ok ? t('当前延迟 {ms}ms', { ms }) : t('未连接')}>
     <${Icon} name=${ok ? 'signal' : 'wifiOff'} class="ping__icon" />
     <span class="ping__value">${ok ? Math.min(9999, Math.round(ms)) : '--'}</span><span class="ping__unit">ms</span>
   </span>`;
@@ -781,7 +866,7 @@ export function DifficultyIcon({ difficulty, class: cls }) {
  * @param {{ difficulty: string, size?: 'sm'|'md'|'lg', class?: string, code?: string }} props
  */
 export function DifficultyTag({ difficulty, size = 'md', class: cls, code }) {
-  const name = DIFFICULTY_NAMES[difficulty] || difficulty || '—';
+  const name = DIFFICULTY_NAMES[difficulty] ? t(DIFFICULTY_NAMES[difficulty]) : difficulty || '—';
   const color = DIFFICULTY_COLORS[difficulty] || 'var(--text-lo)';
   return html`<span class=${cx('dtag', `dtag--${size}`, cls)} style=${`--d-color:${color}`}>
     <${DifficultyIcon} difficulty=${difficulty} class="dtag__icon" />

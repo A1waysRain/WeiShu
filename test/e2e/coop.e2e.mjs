@@ -27,7 +27,7 @@
 // (the piece returns), re-orient in place, tap → underframe (撤退 / 出售 +N) + range, 撤退, tap-sell, item → 销毁 only,
 // long-press-free right-click detail, no drag-to-sell zone, touch (pointerType touch) placement through the wheel.
 // Solo: 独立模拟 (绝境) through round 3 (incl. the solo 机变 of round 3). Result: a solo run on a fast-timer server
-// (same engine, scaled timers) to RESULT, then 返回同盟.
+// (same engine, scaled timers) to RESULT: the settlement flow (intro → 个人战报 → 下一步 → 同盟), then 返回同盟.
 // Every page must finish with zero console errors, page errors, failed requests or HTTP errors.
 // Screenshots: test/e2e/out/{coop,solo,result}-*.png (…-720.png = the 1280×720 client).
 
@@ -35,7 +35,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { Client, ROOT, sleep, hasChrome, startRealServer, problemsOf } from './client.mjs';
+import { Client, ROOT, sleep, hasChrome, startRealServer, problemsOf, groundAnchor, anchorPoint, cameraSettled } from './client.mjs';
 
 const ENABLED = (process.env.SP_E2E === '1' || !process.env.NODE_TEST_CONTEXT) && hasChrome() && existsSync(path.join(ROOT, 'public/assets'));
 const ONLY = process.env.SP_E2E_ONLY || '';
@@ -56,7 +56,9 @@ async function checkHud(c, where) {
     const s = globalThis.__SP__.store.get();
     const pub = s.match.public; const priv = s.match.private;
     const txt = (sel) => document.querySelector(sel)?.textContent?.trim() ?? null;
-    const shopChess = (priv?.shop?.slots || []).filter((x) => x && x.kind !== 'item').length;
+    // a chess slot is any slot but the item's: a slot a 调度中心 upgrade opened stays null until the next roll and shows an
+    // empty card (DESIGN §27.52, ui/shopBar.js chessSlots)
+    const shopChess = (priv?.shop?.slots || []).filter((x) => !x || x.kind !== 'item').length;
     return {
       phase: pub?.phase, round: pub?.round, lastRound: pub?.lastRound, players: (pub?.players || []).length,
       lp: priv?.lp, teamLp: pub?.teamLp, funds: priv?.funds, cap: priv?.deployCap, count: priv?.deployCount,
@@ -193,23 +195,29 @@ async function levelUp(c, { shot = null } = {}) {
 }
 
 async function refreshKey(c) {
-  const s = await c.st();
-  if (s.funds < s.refreshPrice) return false;
-  const shop = () => c.page.evaluate(() => { const sh = globalThis.__SP__.store.get().match.private.shop; return { ids: JSON.stringify(sh.slots.map((x) => x && x.id)), free: sh.freeRefreshes }; });
+  // phase, funds, price, free counter and slots from ONE store snapshot: the m.private that answers R carries them all,
+  // and two separate reads could straddle it — the new slots with the old funds, a false "refresh cost" under load
+  const shop = () => c.page.evaluate(() => {
+    const st = globalThis.__SP__.store.get();
+    const priv = st.match.private;
+    const sh = priv.shop;
+    return { phase: st.match.public?.phase ?? null, funds: priv.funds, price: sh.refreshPrice, free: sh.freeRefreshes, ids: JSON.stringify(sh.slots.map((x) => x && x.id)) };
+  });
   const before = await shop();
+  if (before.funds < before.price) return false;
   await c.page.mouse.click(c.w / 2, c.h * 0.3); // focus the page (not a text field)
   await c.page.keyboard.press('KeyR');
   // a free refresh (机变 补给 …) changes the free counter, a paid one the funds; the slots are rerolled either way
   const t0 = Date.now();
-  let after = null; let now = null;
+  let now = null;
   while (Date.now() - t0 < 6000) {
-    after = await c.st(); now = await shop();
-    if (after.phase !== 'PREP' || after.funds !== s.funds || now.free !== before.free || now.ids !== before.ids) break;
+    now = await shop();
+    if (now.phase !== 'PREP' || now.funds !== before.funds || now.free !== before.free || now.ids !== before.ids) break;
     await sleep(150);
   }
-  assert.ok(after.funds !== s.funds || now.free !== before.free || now.ids !== before.ids, `${c.label}: R refreshed the shop`);
-  if (s.refreshPrice > 0) assert.equal(after.funds, s.funds - s.refreshPrice, `${c.label}: refresh cost`);
-  c.note(`refresh (R) ${s.refreshPrice ? `funds ${s.funds} → ${after.funds}` : `free (${before.free} → ${now.free})`}, slots ${before.ids === now.ids ? 'same ids' : 'rerolled'}`);
+  assert.ok(now.funds !== before.funds || now.free !== before.free || now.ids !== before.ids, `${c.label}: R refreshed the shop`);
+  if (before.price > 0) assert.equal(now.funds, before.funds - before.price, `${c.label}: refresh cost`);
+  c.note(`refresh (R) ${before.price ? `funds ${before.funds} → ${now.funds}` : `free (${before.free} → ${now.free})`}, slots ${before.ids === now.ids ? 'same ids' : 'rerolled'}`);
   return true;
 }
 
@@ -368,6 +376,23 @@ async function moveOnBoard(c) {
   return true;
 }
 
+/**
+ * Press on a board unit at `from`, carry it off its tile and back onto `home` (its own tile), release. `home` is aimed at
+ * again after the pickup: the own prep board's deploy fold zooms the board then (GitHub #602, client.mjs aimedDrag).
+ */
+async function offAndBack(c, from, home) {
+  const anchor = await groundAnchor(c.page, home);
+  const m = c.page.mouse;
+  await m.move(from.x, from.y);
+  await m.down();
+  for (let i = 1; i <= 8; i++) { await m.move(from.x + i * 9, from.y - i * 4); await sleep(14); }
+  await cameraSettled(c.page);
+  const to = (await anchorPoint(c.page, anchor)) || home;
+  for (let i = 1; i <= 10; i++) { await m.move(from.x + 72 + ((to.x - from.x - 72) * i) / 10, from.y - 32 + ((to.y - from.y + 32) * i) / 10); await sleep(14); }
+  await sleep(150);
+  await m.up();
+}
+
 /** Re-orient in place: drag a board unit off and back onto its own tile → the wheel → a new direction. */
 async function reorientInPlace(c, dir = 'LEFT', { midShot = null } = {}) {
   const unit = (await frontUnits(c))[0];
@@ -376,14 +401,9 @@ async function reorientInPlace(c, dir = 'LEFT', { midShot = null } = {}) {
   const from = await c.piecePoint(unit.uid);
   const home = await c.tilePoint(unit.row, unit.col);
   if (!from || !home) return false;
-  // off the tile and back: a plain drag whose release lands on the unit's own tile
-  const m = c.page.mouse;
-  await m.move(from.x, from.y);
-  await m.down();
-  for (let i = 1; i <= 8; i++) { await m.move(from.x + i * 9, from.y - i * 4); await sleep(14); }
-  for (let i = 1; i <= 10; i++) { await m.move(from.x + 72 + ((home.x - from.x - 72) * i) / 10, from.y - 32 + ((home.y - from.y + 32) * i) / 10); await sleep(14); }
-  await sleep(150);
-  await m.up();
+  // off the tile and back: a plain drag whose release lands on the unit's own tile (aimed at again once the piece is
+  // picked up: the deploy fold zooms the board then — GitHub #602)
+  await offAndBack(c, from, home);
   await chooseDirection(c, unit.uid, { row: unit.row, col: unit.col }, dir, { midShot });
   await sleep(500);
   const after = await c.boardPiece(unit.uid);
@@ -436,12 +456,14 @@ async function sellByTap(c, { shot = 'underframe' } = {}) {
   const unit = (await frontUnits(c, (b) => !b.golden && !b.items))[0];
   if (!unit) return false;
   const before = await c.st();
-  // dropping on the shop bar no longer sells (no drag-to-sell zone): the unit stays on the board
+  // no drag-to-sell zone: the shop bar folds away while a piece is carried (GitHub #602) and a release over its tab — DOM
+  // UI — puts the piece back; the unit stays on the board
+  const centre = (sel) => c.page.$eval(sel, (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }).catch(() => null);
   const bar = await c.page.$eval('.shopbar__row', (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width * 0.45, y: r.top + r.height / 2 }; });
   const from = await c.piecePoint(unit.uid);
-  await c.drag(from, bar);
+  await c.drag(from, bar, { retarget: () => centre('.shopbar-tab') });
   await sleep(500);
-  assert.ok((await c.boardPieces()).some((b) => b.uid === unit.uid), `${c.label}: dropping on the shop bar does not sell`);
+  assert.ok((await c.boardPieces()).some((b) => b.uid === unit.uid), `${c.label}: a release over the folded shop does not sell`);
   assert.equal(await c.exists('.sellzone'), false, 'no sell zone');
   assert.ok(await tapUnit(c, unit.uid), `${c.label}: tapping the unit opens its underframe`);
   assert.ok(await c.exists('.uframe__btn--retreat'), 'underframe: 撤退');
@@ -600,7 +622,8 @@ async function ready(c, { key = false } = {}) {
   if (!(await c.isEditable())) return;
   const s = await c.st();
   if (!s.canReady) { c.note(`temp not empty (${s.temp}) — ready blocked`); return; }
-  if (key) { await c.page.mouse.click(c.w / 2, c.h * 0.3); await c.page.keyboard.press('Space'); } else await c.click('.readybtn');
+  // Space asks about leftover funds like the button does (剩余资金, DESIGN §23.11); the button path confirms inside c.click
+  if (key) { await c.page.mouse.click(c.w / 2, c.h * 0.3); await c.page.keyboard.press('Space'); await c.confirmFundsLeft(); } else await c.click('.readybtn');
   await c.waitFor((x) => x.ready || x.phase !== 'PREP', 'ready', 8000);
 }
 
@@ -764,11 +787,17 @@ async function dropOnTile(c, uid, tile) {
   return to;
 }
 
-/** The same with touch input (pointerType 'touch': CDP touch events). */
+/** The same with touch input (pointerType 'touch': CDP touch events), aimed at `to` again after the pickup (GitHub #602). */
 async function touchDrag(c, from, to, steps = 12) {
   const t = c.page.touchscreen;
+  const anchor = await groundAnchor(c.page, to);
   await t.touchStart(from.x, from.y);
-  for (let i = 1; i <= steps; i++) { await t.touchMove(from.x + ((to.x - from.x) * i) / steps, from.y + ((to.y - from.y) * i) / steps); await sleep(16); }
+  const lead = 3;
+  for (let i = 1; i <= lead; i++) { await t.touchMove(from.x + ((to.x - from.x) * i) / steps, from.y + ((to.y - from.y) * i) / steps); await sleep(16); }
+  if (anchor) await cameraSettled(c.page);
+  const dest = (await anchorPoint(c.page, anchor)) || to;
+  const start = { x: from.x + ((to.x - from.x) * lead) / steps, y: from.y + ((to.y - from.y) * lead) / steps };
+  for (let i = 1; i <= steps - lead; i++) { await t.touchMove(start.x + ((dest.x - start.x) * i) / (steps - lead), start.y + ((dest.y - start.y) * i) / (steps - lead)); await sleep(16); }
   await sleep(120);
   await t.touchEnd();
 }
@@ -789,7 +818,9 @@ async function facingTour(c, did) {
   if (!did.item && !(await c.handPieces('item')).length) did.itemBought = await buyOne(c, '.shopbar__item .scard:not(.scard--sold):not(.is-disabled)').catch(() => false);
   const units = () => c.handPieces().then((h) => h.filter((p) => p.kind === 'chess'));
   let hand = await units();
-  assert.ok(hand.length >= 1, 'bought operators');
+  // a bought operator can merge into an elite at once (two copies already fielded) and leave the bench empty: the
+  // placement steps then wait for a later round (`did` carries them over)
+  if (!hand.length) { c.note('facing: no operator on the bench this round (the bought ones merged)'); return; }
   // place + choose a direction (UP: striped rotated range + 拖回中心区域取消 while held) — the unit with the widest range
   // grid shows it best (a defender's grid is its own tile only)
   if (!did.place) {
@@ -907,11 +938,7 @@ async function facingTour(c, did) {
     const n0 = (await c.requests('g.move')).length;
     const from = await c.piecePoint(other.uid);
     const home = await c.tilePoint(other.row, other.col);
-    const m = c.page.mouse;
-    await m.move(from.x, from.y); await m.down();
-    for (let i = 1; i <= 8; i++) { await m.move(from.x + i * 9, from.y - i * 4); await sleep(14); }
-    for (let i = 1; i <= 10; i++) { await m.move(from.x + 72 + ((home.x - from.x - 72) * i) / 10, from.y - 32 + ((home.y - from.y + 32) * i) / 10); await sleep(14); }
-    await sleep(150); await m.up();
+    await offAndBack(c, from, home);
     if (await c.page.waitForSelector('.fwheel__dia', { timeout: 3000 }).then(() => true, () => false)) {
       assert.equal(await c.exists('.dpanel'), false, 'a drag closes the right-click detail card');
       await c.page.keyboard.press('Escape');
@@ -1053,10 +1080,17 @@ describe('browser E2E against the real server', { skip: !ENABLED && 'needs Chrom
           if (!shotDraft.has(c.label)) { shotDraft.add(c.label); await sleep(700); await c.shot(s.draft?.turn === s.me ? 'draft-myturn' : 'draft-waiting'); }
           if (picked.has(c.label) || s.draft?.turn !== s.me) continue;
           if (c === guest && !guestSkipped) {
-            await c.click('.draft-detail__btns .btn', '跳过');
             guestSkipped = true;
-            c.note('band draft: skipped once');
-            continue;
+            // one skip — only while someone is left to pass to: the last player still to pick sees 跳过 disabled
+            // (PR #546), which a random draft order gives the guest about one time in three
+            const canSkip = await c.page.evaluate(() => [...document.querySelectorAll('.draft-detail__btns .btn')]
+              .some((b) => b.textContent.includes('跳过') && !b.disabled));
+            if (canSkip) {
+              await c.click('.draft-detail__btns .btn', '跳过');
+              c.note('band draft: skipped once');
+              continue;
+            }
+            c.note('band draft: 跳过 disabled (the last player still to pick)');
           }
           if ((s.draft?.picks || 0) > 0) {
             // research 09 §5: a strategy a teammate (human or AI) picked is marked 队友已选 and cannot be chosen
@@ -1191,6 +1225,16 @@ describe('browser E2E against the real server', { skip: !ENABLED && 'needs Chrom
           } else if (hs.phase === 'UNITE') {
             const rs = await runnerState(host);
             assert.ok(rs && rs.kind === 'unite', 'every human simulates the 联防 field locally');
+            // 0.2.1 (the owner's decision of 2026-10-07): the 联防 field is the round's battlefield, terrain and crates
+            // included — the field meta names the match stage and the view draws it (0.2.0 drew the escaped levels' road)
+            for (const c of both) {
+              const drawn = await c.page.evaluate(() => {
+                const s = globalThis.__SP__.store.get();
+                return { match: s.match.public?.stageId ?? null, field: s.match.field?.stageId ?? null, shown: globalThis.__SP_VIEW__?.raw?.debug?.tiles?.stage?.id ?? null };
+              });
+              assert.ok(drawn.match && drawn.field === drawn.match && drawn.shown === drawn.match, `${c.label}: the 联防 field shows the round's battlefield (${JSON.stringify(drawn)})`);
+              c.note(`联防 round ${hs.round} drawn on ${drawn.shown}`);
+            }
           }
           if (hs.round >= ROUNDS && hs.phase === 'COMBAT') { await sleep(2000); break; }
         } else if (hs.phase === 'SETTLE' && !seen.has(`settle-${hs.round}`)) {
@@ -1354,12 +1398,19 @@ describe('browser E2E against the real server', { skip: !ENABLED && 'needs Chrom
         assert.deepEqual(bossPrep.pf, { kind: 'bossPrep', side: 'L', mirror: false }, 'solo: the left half');
         assert.equal(bossPrep.err, null, 'a deploy in the boss-round prep lands on its board tile with its direction');
       } else c.note('the run ended before the boss round');
-      await c.page.waitForSelector('.screen.result', { timeout: 10000 });
-      await sleep(1500);
+      await c.page.waitForSelector('[data-testid="settle"]', { timeout: 10000 });
+      // the radar intro gives way to my own report by itself (screens/settle.js INTRO_MS)
+      await c.page.waitForSelector('[data-testid="settle-self"]', { timeout: 10000 });
+      await sleep(2000);
       await c.shot('screen');
-      const players = await c.page.$$eval('.rcard', (els) => els.length);
+      assert.equal(await c.page.$$eval('.sops .sop', (els) => els.length), 10, 'the report shows the ten lineup slots');
+      await c.click('.settle__next');
+      await c.page.waitForSelector('[data-testid="settle-team"]', { timeout: 10000 });
+      await sleep(1000);
+      await c.shot('team');
+      const players = await c.page.$$eval('.tcard', (els) => els.length);
       assert.equal(players, 1, 'one player card');
-      await c.click('.result__foot button');
+      await c.click('.settle__back');
       await c.page.waitForSelector('.room-screen, .lobby-screen', { timeout: 15000 });
       await sleep(500);
       await c.shot('back');

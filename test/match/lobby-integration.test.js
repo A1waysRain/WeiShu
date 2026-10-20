@@ -6,6 +6,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startServer } from '../../server/index.js';
+import { getData } from '../../server/data.js';
 import { Match } from '../../server/match/Match.js';
 import { TestClient } from '../helpers/wsClient.js';
 import { FakeBattle } from './fakeBattle.js';
@@ -23,7 +24,8 @@ let srv = null;
 const clients = [];
 
 async function server() {
-  if (!srv) srv = await startServer({ port: 0, host: '127.0.0.1', log, MatchClass: FastMatch });
+  // Issue #144: in the one-human + AI draft, seed 69 makes the AI take band_bldsk first.
+  if (!srv) srv = await startServer({ port: 0, host: '127.0.0.1', log, MatchClass: FastMatch, seedFn: () => 69 });
   return srv;
 }
 async function player(name, token) {
@@ -37,6 +39,23 @@ async function player(name, token) {
   return c;
 }
 const ok = async (c, msg) => { const r = await c.request(msg); assert.equal(r.t, 'ok', `${msg.t}: ${JSON.stringify(r)}`); return r; };
+
+/** Pick from the current public draft, including the AI's choices; never rely on a timeout after a refused pick. */
+async function pickCoopBands(players) {
+  const pending = new Map(players.map((c) => [c.id, c]));
+  let frame;
+  while (pending.size) {
+    frame = await players[0].waitFor('m.public', (p) => p.phase === 'BAND_DRAFT' && pending.has(p.draft?.turn), 10000);
+    assert.equal(frame.draft.order.length, frame.players.length);
+    const taken = new Set(Object.values(frame.draft.picks));
+    const band = Object.values(getData().bands).find((b) =>
+      (!Array.isArray(b.modeTypeList) || b.modeTypeList.includes('MULTI')) && !taken.has(b.bandId));
+    assert.ok(band, 'a co-op strategy is still available');
+    await ok(pending.get(frame.draft.turn), { t: 'g.band', bandId: band.bandId });
+    pending.delete(frame.draft.turn);
+  }
+  return frame;
+}
 
 after(async () => {
   for (const c of clients) await c.terminate().catch(() => {});
@@ -107,15 +126,7 @@ test('co-op over websockets: two humans + AI, reconnect with the token mid-match
   }
   await ok(a, { t: 'g.infoReady' });
   await ok(b, { t: 'g.infoReady' });
-  const draft = await a.waitFor('m.public', (p) => p.phase === 'BAND_DRAFT' && p.draft);
-  assert.equal(draft.draft.order.length, 3);
-  // humans pick when it is their turn (bots pick themselves)
-  for (let i = 0; i < 20; i++) {
-    const p = await a.waitFor('m.public', (x) => x.phase !== 'BAND_DRAFT' || [a.id, b.id].includes(x.draft && x.draft.turn), 10000);
-    if (p.phase !== 'BAND_DRAFT') break;
-    const who = p.draft.turn === a.id ? a : b;
-    await who.request({ t: 'g.band', bandId: 'band_bldsk' });
-  }
+  await pickCoopBands([a, b]);
   await a.waitFor('m.public', (p) => p.phase === 'PREP' && p.round === 1, 10000);
   // B drops and comes back with its token
   await b.terminate();
@@ -126,7 +137,9 @@ test('co-op over websockets: two humans + AI, reconnect with the token mid-match
   assert.equal(priv.playerId, b2.id);
   await ok(a, { t: 'g.ready', ready: true });
   await ok(b2, { t: 'g.ready', ready: true });
-  await a.waitFor('m.public', (p) => p.phase === 'COMBAT', 10000);
+  // Instant simulated battles can finish before the throttled public phase is broadcast, as in the solo test.
+  const start = await a.waitFor('b.start', (x) => x.authoritative, 10000);
+  assert.equal(start.fieldId, `n:${a.id}`);
   await a.waitFor('m.public', (p) => p.phase === 'PREP' && p.round === 2, 15000);
   await ok(a, { t: 'g.leave' });
   await ok(b2, { t: 'g.leave' });
@@ -160,11 +173,8 @@ test('co-op spectator over websockets: watches the real match like an eliminated
     assert.equal(r.code, 'SPECTATOR', msg.t);
   }
   await ok(a, { t: 'g.infoReady' });
-  for (let i = 0; i < 40; i++) { // every draft frame in order: pick on the own turn (the AI picks at once)
-    const p = await a.waitFor('m.public', (x) => x.phase !== 'INFO_CHECK', 10000);
-    if (p.phase !== 'BAND_DRAFT') break;
-    if (p.draft && p.draft.turn === a.id && !p.draft.picks[a.id]) await ok(a, { t: 'g.band', bandId: 'band_bldsk' });
-  }
+  const draft = await pickCoopBands([a]);
+  assert.ok(Object.values(draft.draft.picks).includes('band_bldsk'), 'seed 69: the AI already took the default');
   await a.waitFor('m.public', (p) => p.phase === 'PREP' && p.round === 1, 10000);
   for (const msg of [{ t: 'g.buy', slot: 0 }, { t: 'g.ready', ready: true }, { t: 'g.refresh' }]) {
     const r = await s.request(msg);
@@ -196,6 +206,69 @@ test('co-op spectator over websockets: watches the real match like an eliminated
   await ok(a, { t: 'g.leave' });
   assert.equal((await back.waitFor('room.closed', () => true, 5000)).reason, 'empty');
   assert.deepEqual(errors, []);
+});
+
+// GitHub #120 (PR #120 by @salt-fishes — the in-match 观战席 list, ui/hud.js SpectatorPill): the host frees a spectator seat WHILE
+// the match runs. The server took room.removeSpectator at any time (server/lobby.js removeSpectator; its header says "any
+// time") but the lobby tests only removed one in the lobby: this is the running match.
+test('co-op spectator removed by the host while the match runs: room.closed {kicked}, the seat freed and refilled, no frame after it, the other spectator watches on', async () => {
+  FakeBattle.reset();
+  FakeBattle.script = () => ({ duration: 1 });
+  const watcher = async (name) => {
+    const srvNow = await server();
+    const c = await TestClient.connect(`ws://127.0.0.1:${srvNow.port}/ws`);
+    clients.push(c);
+    const w = await c.hello(name);
+    c.id = w.playerId;
+    c.token = w.token;
+    return c;
+  };
+  const a = await player('A');
+  await ok(a, { t: 'room.create', mode: 'coop', difficulty: 'NORMAL' });
+  const st = await a.waitFor('room.state');
+  await ok(a, { t: 'room.addBot' });
+  const s1 = await watcher('Spec1');
+  const s2 = await watcher('Spec2');
+  await ok(s1, { t: 'room.spectate', code: st.code });
+  await ok(s2, { t: 'room.spectate', code: st.code });
+  await ok(a, { t: 'room.start' });
+  await s1.waitFor('m.public', (p) => p.phase === 'INFO_CHECK');
+  await ok(a, { t: 'g.infoReady' });
+  await pickCoopBands([a]);
+  await a.waitFor('m.public', (p) => p.phase === 'PREP' && p.round === 1, 10000);
+  const running = await a.waitFor('room.state', (x) => x.inMatch && x.spectators.length === 2);
+  assert.deepEqual(running.spectators.map((x) => x.playerId), [s1.id, s2.id], 'both seats are listed while the match runs: what the game screen\'s capsule shows');
+
+  // who may remove: the host only, and only a spectator of this room
+  assert.equal((await s1.request({ t: 'room.removeSpectator', playerId: s2.id })).code, 'NOT_HOST', 'a spectator cannot remove another');
+  assert.equal((await a.request({ t: 'room.removeSpectator', playerId: 'nobody' })).code, 'BAD_TARGET');
+  assert.equal((await a.request({ t: 'room.removeSpectator', playerId: a.id })).code, 'BAD_TARGET', 'a player is no spectator');
+
+  // the host removes the first one: told room.closed {kicked}; the room.state of the match now lists the other only
+  await ok(a, { t: 'room.removeSpectator', playerId: s1.id });
+  assert.equal((await s1.waitFor('room.closed', () => true, 5000)).reason, 'kicked');
+  const after = await a.waitFor('room.state', (x) => x.inMatch && x.spectators.length === 1);
+  assert.deepEqual(after.spectators.map((x) => x.playerId), [s2.id]);
+  assert.equal((await s2.waitFor('room.state', (x) => x.inMatch && x.spectators.length === 1)).spectators[0].playerId, s2.id, 'the other spectator is told too');
+  assert.equal((await a.request({ t: 'room.removeSpectator', playerId: s1.id })).code, 'BAD_TARGET', 'a seat already freed');
+  assert.equal((await s1.request({ t: 'g.watch', fieldId: `n:${a.id}` })).code, 'NOT_IN_ROOM', 'out of the room: no more watching');
+
+  // the match runs on: the removed seat gets no frame of it any more, the other spectator and the player do
+  const mark = s1.log.length;
+  s2.log.length = 0;
+  await ok(a, { t: 'g.ready', ready: true });
+  await s2.waitFor('b.start', (x) => x.kind === 'normal', 10000);
+  await a.waitFor('m.public', (p) => p.phase === 'PREP' && p.round === 2, 15000);
+  assert.deepEqual(s1.log.slice(mark).filter((x) => x.t !== 'pong').map((x) => x.t), [], 'nothing reaches the removed spectator');
+  assert.ok(s2.log.some((x) => x.t === 'm.public'), 'the other spectator still gets the match');
+
+  // the freed seat can be taken again (no ban list: the key is all it takes)
+  const s3 = await watcher('Spec3');
+  await ok(s3, { t: 'room.spectate', code: st.code });
+  const refilled = await a.waitFor('room.state', (x) => x.inMatch && x.spectators.length === 2);
+  assert.deepEqual(refilled.spectators.map((x) => x.playerId), [s2.id, s3.id]);
+  assert.deepEqual(errors, []);
+  await ok(a, { t: 'g.leave' });
 });
 
 test('server-run fallback (SP_COMBAT=server): the match simulates every field and streams m.field + b.snap', async () => {

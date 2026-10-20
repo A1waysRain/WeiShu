@@ -3,7 +3,7 @@ import { html, Button, Modal } from '../ui/components.js';
 import { store, useStore } from '../store.js';
 import { DIFFICULTY_NAMES } from '../../../shared/constants.js';
 import { loadMatchHistory } from '../ui/matchHistory.js';
-import { ResultScreen } from './result.js';
+import { ResultView } from './result.js';
 
 // Uses the app-wide UI slice, so opening a report never changes the live match.
 
@@ -25,7 +25,7 @@ export function HistoryHost() {
       micro="最近 20 局 · 仅保存已结算对局" onClose=${selected ? () => setSelected(null) : close}
       class=${selected ? 'history-box history-box--detail' : 'history-box'} width=${selected ? '96vw' : '8rem'}
       actions=${html`<${Button} onClick=${close}>关闭<//>`}>
-    ${selected ? html`<${ResultScreen} historyRecord=${selected} onClose=${() => setSelected(null)} />`
+    ${selected ? html`<${ResultView} res=${selected.result} myId=${selected.myId} quiet=${true} onBack=${() => setSelected(null)} />`
       : records.length ? html`<div class="history-list">${records.map((record) => {
         const r = record.result;
         const me = r.players.find((p) => p.playerId === record.myId);

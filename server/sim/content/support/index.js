@@ -18,9 +18,10 @@
 //     `PlayerBattleInput.contentInfo`, written by the `global:contentb_info` meta handler (support/meta.js).
 
 import { getData } from '../../../data.js';
+import { grantedBondsByMorph } from '../../../../shared/plugins/rules.js';
 import { COLS, DIRECT_BONUS_STACKING } from '../../constants.js';
 import { frontOf, offsetTile } from '../../dir.js';
-import { bodyInKeys, bodyDist, bodyInRadius, bodyOnTile, bodyTileReach } from '../../body.js';
+import { bodyInKeys, bodyDist, bodyInRadius, bodyOnTile, bodyTileReach, bodyInRange } from '../../body.js';
 
 export { COLS };
 /** Where an enemy can be hit (a huge enemy's whole hit rectangle, sim/body.js) — for every range test on enemies. */
@@ -49,10 +50,12 @@ export const bondRecord = (id) => own(gameData().bonds, id);
 export const itemRecord = (id) => own(gameData().items, id);
 export const garrisonRecord = (id) => own(gameData().garrisons, id);
 export const bandRecord = (id) => own(gameData().bands, id);
+/** Behaviour identity, while the concrete record still supplies all numbers. */
+export const bandEffectId = id => bandRecord(id)?.effectRef ?? id;
 export const effectRecord = (id) => own(gameData().effects, id);
 export const chessRecord = (id) => own(gameData().chess, id);
 /** Registry key of an item: id without the `_a` / `_b` suffix (Arts have none). */
-export const itemKeyOf = (id) => String(id ?? '').replace(/_[ab]$/, '');
+export const itemKeyOf = (id) => String(itemRecord(id)?.effectRef ?? id ?? '').replace(/_[ab]$/, '');
 /** True for golden (进阶) items / elite chess ids. */
 export const isGoldenId = (id) => /_b$/.test(String(id ?? ''));
 
@@ -129,11 +132,11 @@ export function contentInfo(battle, pid) {
   const ci = player(battle, pid)?.input?.contentInfo;
   return ci && typeof ci === 'object' ? ci : {};
 }
-/** Band ids of every alive player of the match (own first); falls back to this battle's players. */
+/** Alive players' bands (own first), plus a retained Touch team grant; falls back to this battle's players. */
 export function matchBands(battle, pid) {
   const mb = contentInfo(battle, pid).matchBands;
-  if (Array.isArray(mb) && mb.length) return mb;
-  return (battle.players || []).map((p) => p.bandId).filter(Boolean);
+  if (Array.isArray(mb) && mb.length) return mb.map(bandEffectId);
+  return (battle.players || []).map((p) => bandEffectId(p.bandId)).filter(Boolean);
 }
 
 // =====================================================================================================================
@@ -160,7 +163,7 @@ export function tierOf(u) {
  */
 export const isGroundOp = (u) => isOp(u) && u.def?.position === 'MELEE';
 /** Base (normal) chess id of an operator (normal and elite share it). */
-export const baseChessId = (u) => String(u?.def?.baseId ?? u?.defId ?? '').replace(/_b$/, '_a');
+export const baseChessId = (u) => u?.def?.baseId ?? String(u?.defId ?? '').replace(/_b$/, '_a');
 
 /** Equipment ids carried by a unit (golden ids when merged). */
 export const itemsOf = (u) => (u && Array.isArray(u.items) ? u.items : EMPTY);
@@ -176,17 +179,13 @@ export function unitBonds(u) {
   if (!isOp(u)) return EMPTY;
   const cached = BONDS.get(u);
   const items = itemsOf(u);
-  const key = items.join('|');
+  const plus = u.player?.morphPairing === 'plus';
+  // The official key stays items.join('|'), so a cached official result is unchanged.
+  const key = (plus ? 'plus|' : '') + items.join('|');
   if (cached && cached.key === key) return cached.bonds;
   const out = [...(Array.isArray(u.def?.bonds) ? u.def.bonds : Array.isArray(u.def?.raw?.bonds) ? u.def.raw.bonds : [])];
-  if (items.length >= 2) {
-    const recs = items.map((id) => itemRecord(id)).filter(Boolean);
-    if (recs.some((r) => r.canGiveBond)) {
-      for (const r of recs) {
-        if (r.canGiveBond) continue;
-        if (typeof r.giveBondId === 'string' && bondRecord(r.giveBondId) && !out.includes(r.giveBondId)) out.push(r.giveBondId);
-      }
-    }
+  for (const b of grantedBondsByMorph(items, (id) => itemRecord(id), { mode: plus ? 'plus' : 'official', bondOk: (id) => !!bondRecord(id) })) {
+    if (!out.includes(b)) out.push(b);
   }
   const bonds = Object.freeze(out);
   BONDS.set(u, { key, bonds });
@@ -265,7 +264,7 @@ export const tileKey = (u) => (u.side === 'ally' ? u.tileR * COLS + u.tileC : Ma
 /** Is `target` on a tile of `keys` (Set or array)? An ally: its tile; an enemy: its body (a huge one: every tile). */
 export const onKeys = (target, keys) => {
   if (!target || !keys) return false;
-  if (target.side !== 'ally') return bodyInKeys(target, keys);
+  if (target.side !== 'ally') return bodyInRange(target, keys);
   const k = tileKey(target);
   return keys instanceof Set ? keys.has(k) : keys.includes(k);
 };

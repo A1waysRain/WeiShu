@@ -204,9 +204,11 @@ describe('wiring', () => {
     assert.match(app, /hud: hudBands\(vk, sz, \{ shop: o\.shop !== false \}\),/);
     assert.match(app, /return opts\.hud\(kind, sz, o\) \|\| null;/);
     const game = read('public/js/screens/game.js');
-    assert.match(game, /const shopFolded = showShop && \(pen \? penRef\.current\.collapsed : collapsed\);/);
-    // entering prep and the boss-prep re-frame take the fold state; a fold / unfold re-frames through foldCamera
+    // issue #602 also ORs the deploy interaction's temporary fold into the camera state (issue602-deploy-fold.test.js)
+    assert.match(game, /const shopFolded = showShop && \(pen \? penRef\.current\.collapsed : \(collapsed \|\| deployFold\)\);/);
+    // entering prep and the boss-prep re-frame take the fold state; a fold / unfold re-frames through prepDeployCamera
+    // (which calls foldCamera, still deferred while busy unless a deploy zoom is being given back — issue #602)
     assert.equal((game.match(/const pc = prepCameraFor\(pub, myId, shopFolded\);/g) || []).length, 2);
-    assert.match(game, /const next = foldCamera\(\{\n\s+pub, myId, folded: shopFolded, ownPrep: !!view && viewModeRef\.current === 'prep' && showPrep,\n\s+pen, busy: !!drag \|\| !!facing, current: camRef\.current,\n\s+\}\);\n\s+if \(next\) setCam\(next\.kind, next\.opts\);\n\s+\}, \[view, shopFolded, showPrep, pen, !!drag, !!facing, prepCamKey\]\);/);
+    assert.match(game, /const next = prepDeployCamera\(\{\n\s+pub, myId, deployFold, releaseDeploy: step\.release, folded: shopFolded,\n\s+ownPrep: !!view && viewModeRef\.current === 'prep' && showPrep,\n\s+pen, busy: !!drag \|\| !!facing, current: camRef\.current,\n\s+\}\);\n\s+\/\/ a null release because the pen is open stays owed; a null only because the camera already\n\s+\/\/ matches the player's fold spends it\. \[ASSUMED\]\n\s+deployZoomedRef\.current = deployZoomRemember\(step, \{ next, pen \}\);\n\s+\/\/ the fold zoom and the restore fly with the short FOLD_CAMERA_MS, not a generic camera flight\n\s+if \(next\) setCam\(next\.kind, \{ \.\.\.next\.opts, ms: FOLD_CAMERA_MS \}\);/);
   });
 });

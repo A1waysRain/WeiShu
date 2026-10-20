@@ -16,7 +16,9 @@ jobs:
   test:
     name: test (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # The unit & integration step alone took 19.7 min (ubuntu) and 22.4 min (windows) on Node 22 in run 38777566530,
+    # and more tests ran to the end once the Windows failures were fixed: 25 minutes left no margin.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -44,8 +46,10 @@ jobs:
       - name: Setup check (no downloads)
         run: node tools/setup.mjs --check --no-local
 
+      # package.json "test": node --test over the test files. A bare `node --test` would also run every helper and
+      # fixture under test/ (Node's default patterns take any .js there for a test file).
       - name: Unit & integration tests
-        run: node --test
+        run: npm run test
 
       - name: Server smoke test (boot, /healthz, index.html, doctor)
         shell: bash
@@ -66,3 +70,29 @@ jobs:
           curl -fsS -o /dev/null http://127.0.0.1:3000/vendor/pixi.min.js
           node tools/doctor.mjs || true
           kill $pid || true
+
+  # Separate from the test matrix so lint / types / import boundaries run once, not four times.
+  # Lint warnings do not fail the job (npm run lint does not pass --max-warnings=0).
+  tooling:
+    name: tooling (lint, imports, typecheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (npm ci → postinstall copies public/vendor)
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint (warnings allowed)
+        run: npm run lint
+
+      - name: Import boundaries
+        run: npm run check:imports
+
+      - name: Typecheck
+        run: npm run typecheck

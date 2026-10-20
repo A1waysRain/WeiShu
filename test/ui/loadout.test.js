@@ -43,7 +43,8 @@ test('parseStored: tolerant of junk, keeps structurally valid entries; toStored 
 test('exportPayload / serializeExport: versioned envelope, entries copied; parseImport round trip', () => {
   const entries = { [INSIDE]: { skill: 0 }, [SWIRE]: { module: SWIRE_ALT } };
   const p = exportPayload(entries, { now: Date.UTC(2026, 9, 3, 4, 5, 6) });
-  assert.deepEqual(Object.keys(p).sort(), ['count', 'entries', 'exportedAt', 'kind', 'v'], 'exactly the envelope, no unused field');
+  assert.deepEqual(Object.keys(p).sort(), ['count', 'entries', 'exportedAt', 'kind', 'ops', 'v'], 'exactly the envelope (0.2.2: + the 潜能 / 练度 ops), no unused field');
+  assert.deepEqual(p.ops, {}, 'no settings: an empty map (an import then resets the settings to the defaults)');
   assert.equal(p.kind, LOADOUT_EXPORT_KIND);
   assert.equal(p.v, LOADOUT_VERSION);
   assert.equal(p.count, 2);
@@ -255,6 +256,22 @@ function fakeTimers() {
 }
 const syncStore = (entries = {}) => createStore({ entries, open: false, from: null, sel: null, filters: {}, sync: 'idle' });
 
+test('prep sync sends explicit defaults when a live skill/module or cultivation choice is reset', async () => {
+  const net = fakeNet(), timers = fakeTimers(), target = syncStore();
+  const charId = SB.charId;
+  const sync = installLoadoutSync({ net, timers, target, lookupChess: get,
+    getChessReady: async () => CHESS, getBackupsReady: async () => ({}), operatorIds: () => new Set([charId]),
+    matchState: () => ({ room: { content: { rules: { prepLoadout: 'prep' } } }, match: {
+      public: { phase: PHASE.PREP }, private: { loadout: { [SWIRE]: { skill: 0, module: SWIRE_ALT } }, ops: { [charId]: { potential: 1, cultivate: 0 } } },
+    } }),
+  });
+  await sync.flush();
+  const opts = chessOptions(SB, SG);
+  assert.deepEqual(net.sent[0].entries, { [SWIRE]: { skill: opts.defaultSkill, module: opts.defaultModule } });
+  assert.deepEqual(net.sent[0].ops, { [charId]: { potential: 6, cultivate: 3 } });
+  sync.dispose();
+});
+
 test('sync: welcome sends the sanitised loadout; edits are debounced; identical content is not resent', async () => {
   const net = fakeNet();
   const T = fakeTimers();
@@ -262,7 +279,7 @@ test('sync: welcome sends the sanitised loadout; edits are debounced; identical 
   const s = installLoadoutSync({ net, timers: T, target, getChessReady: async () => CHESS, lookupChess: get });
   net.emit('welcome', {});
   await T.advance(100);
-  assert.deepEqual(net.sent, [{ t: 'room.loadout', entries: { [INSIDE]: { skill: 0 } } }], 'stale entry dropped');
+  assert.deepEqual(net.sent, [{ t: 'room.loadout', entries: { [INSIDE]: { skill: 0 } }, ops: {} }], 'stale entry dropped (no 潜能 / 练度 set: ops {})');
   assert.equal(target.get().sync, 'synced');
   target.set({ entries: { [INSIDE]: { skill: 0 }, [SWIRE]: { module: SWIRE_ALT } } });
   target.set({ entries: { [INSIDE]: { skill: 0 }, [SWIRE]: { module: MODULE_NONE } } });
@@ -359,6 +376,9 @@ test('overlay auto-close: briefing entry closes when INFO_CHECK ends; lobby / ro
   assert.equal(shouldAutoClose(open('room'), null, true, false), true);
   assert.equal(shouldAutoClose(open('lobby'), PHASE.INFO_CHECK, true, true), false, 'reopened during the briefing from elsewhere');
   assert.equal(shouldAutoClose({ open: false, from: 'briefing' }, PHASE.PREP, true, true), false);
+  assert.equal(shouldAutoClose(open('prep'), PHASE.PREP, true, true, false), false, 'prep entry stays open until ready');
+  assert.equal(shouldAutoClose(open('prep'), PHASE.PREP, true, true, true), true, 'pressing 准备 closes it');
+  assert.equal(shouldAutoClose(open('prep'), PHASE.COMBAT, true, true, false), true, 'leaving 休整期 closes it');
 });
 
 test('untimed phases show no countdown: the "无倒计时" placeholder of Countdown is hidden (user playtest #11)', () => {
@@ -480,7 +500,7 @@ test('sync: an empty loadout is sent without loading chess.json (no 1.6 MB downl
   const s = installLoadoutSync({ net, timers: T, target, getChessReady: async () => { loads++; return CHESS; }, lookupChess: get, notify: () => {} });
   net.emit('welcome', {});
   await T.advance(100);
-  assert.deepEqual(net.sent, [{ t: 'room.loadout', entries: {} }]);
+  assert.deepEqual(net.sent, [{ t: 'room.loadout', entries: {}, ops: {} }]);
   assert.equal(loads, 0);
   await net.reply();
   target.set({ entries: { [INSIDE]: { skill: 0 } } });

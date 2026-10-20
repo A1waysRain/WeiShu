@@ -10,7 +10,8 @@
 //   4. solo battle: the pause button sends g.pause {on}, m.public.paused shows the overlay and freezes the countdown,
 //      Space resumes; no pause control in co-op or in prep.
 // Real server (test/e2e/fastServer.mjs, real clicks and canvas drags):
-//   1+4. a solo run: equip two items on an operator, drop a third → dialog → 取消 (nothing sent) → pick the OLDER item →
+//   1+4. a solo run: equip two items on an operator, drop a third → dialog → 取消 (nothing sent, the item drawn back on its
+//        bench slot) → pick the OLDER item →
 //        the real engine destroys exactly that one; then ready → the real local battle → pause (the battle clock and the
 //        countdown stand still) → 继续作战;
 //   3. the server restarts while the briefing is on screen → 「服务器会话已重置，上一局模拟已结束」 and the lobby.
@@ -53,7 +54,7 @@ describe('client leftovers — mock harness', { skip: !ENABLED && 'set SP_E2E=1 
     const problems = [];
     page.on('console', (m) => { if (m.type() === 'error') problems.push(`console: ${m.text()}`); });
     page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
-    page.on('requestfailed', (r) => problems.push(`requestfailed: ${r.url()} ${r.failure()?.errorText}`));
+    page.on('requestfailed', (r) => { if (!/fonts\.(googleapis|gstatic)/.test(r.url())) problems.push(`requestfailed: ${r.url()} ${r.failure()?.errorText}`); });
     page.on('response', (r) => { if (r.status() >= 400) problems.push(`http ${r.status()}: ${r.url()}`); });
     await page.goto(`${base}/dev/game-mock.html?shot=1&${query}`, { waitUntil: 'networkidle0' });
     await page.waitForFunction(() => !!document.querySelector('.screen:not(.gload)'), { timeout: 15000 });
@@ -155,7 +156,9 @@ describe('client leftovers — mock harness', { skip: !ENABLED && 'set SP_E2E=1 
     assert.match(pend, /DOT/);
     assert.match(pend, /\d+\s*秒后全队生命值开始流失/);
     const secs = Number(pend.match(/(\d+)\s*秒后/)[1]);
-    assert.ok(secs > 10 && secs <= 18, `drain in ${secs} s`);
+    // the mock sets the drain 18 s after its script ran; the page is read after networkidle0, which waits for the
+    // official effects the board preloads (about 8 s here), so only the range is checked
+    assert.ok(secs > 0 && secs <= 18, `drain in ${secs} s`);
     assert.equal(await page.$eval('.gtop__right .countdown', (el) => el.getAttribute('aria-label')), '剩余0秒');
     await page.screenshot({ path: path.join(OUT, 'leftover-fa-overtime.png') });
     assert.deepEqual(problems, []);
@@ -275,6 +278,7 @@ describe('client leftovers — real server', { skip: !ENABLED && 'set SP_E2E=1 (
       const equipped = await itemsOf();
       assert.deepEqual(equipped.map((x) => x.id), KIT_ITEMS.slice(0, 2));
       const third = await handItem(KIT_ITEMS[2]);
+      const benchSlot = await c.piecePoint(third.uid, 0.5); // where the view draws it in the hand
 
       // the third: dialog → 取消 → nothing sent / changed
       await dropItem(third);
@@ -289,6 +293,15 @@ describe('client leftovers — real server', { skip: !ENABLED && 'set SP_E2E=1 (
       assert.equal((await c.requests('g.equip')).length, sentBefore, '取消: no g.equip');
       assert.deepEqual(await itemsOf(), equipped, '取消: unchanged');
       assert.ok(await handItem(KIT_ITEMS[2]), '取消: the item stays in the hand');
+      // ... and is drawn back on its bench slot before it is picked up again. The view keeps a dropped piece on the drop
+      // tile for 1.3 s (render/app/tune.js DROP_PENDING_MS), then flies it back in a frame-timed tween: with few frames
+      // (software-rendered headless Chrome on a loaded machine) the drag aimed where it stood a moment before grabbed the
+      // operator under it, whose direction wheel then swallowed the retry (the 0.2.0 candidate's full pass).
+      const back = await c.page.waitForFunction((uid, x, y) => {
+        const r = globalThis.__SP_VIEW__?.pieceScreenRect(uid);
+        return !!r && Math.abs(r.left + r.width / 2 - x) < 2 && Math.abs(r.top + r.height / 2 - y) < 2;
+      }, { timeout: 15000, polling: 100 }, third.uid, benchSlot.x, benchSlot.y).then(() => true, () => false);
+      assert.ok(back, '取消: the item is drawn back on its bench slot');
 
       // again → pick the OLDER item (not the server's default either way: explicit replaceUid) → 确认替换
       await dropItem(third);

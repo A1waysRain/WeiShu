@@ -16,8 +16,8 @@ android {
         applicationId 'org.strongholdprotocol.alliance'
         minSdk 24
         targetSdk 35
-        versionCode 1
-        versionName '0.1.3'
+        versionCode 311
+        versionName '0.3.11'
         ndk { abiFilters 'arm64-v8a' }
         externalNativeBuild {
             cmake { arguments '-DANDROID_STL=c++_shared' }
@@ -54,6 +54,13 @@ tasks.register('bundleGame', Zip) {
     into('data') { from(new File(repo, 'data')) }
     into('public') { from(new File(repo, 'public')) }
     into('node_modules/ws') { from(new File(repo, 'node_modules/ws')) }
+    into('node_modules/ses') { from(new File(repo, 'node_modules/ses')) }
+    into('node_modules/acorn') { from(new File(repo, 'node_modules/acorn')) }
+    into('node_modules/@endo') { from(new File(repo, 'node_modules/@endo')) }
+    into('plugins') { from(new File(repo, 'plugins')) }
+    into('schemas') { from(new File(repo, 'schemas')) }
+    into('tools') { from(new File(repo, 'tools')) }
+    into('packs') { from(new File(repo, 'packs')) }
     // server/sim/nodeData.js can use these research tables as a fallback.
     into('docs/research') { from(new File(repo, 'docs/research')) }
     exclude '**/.DS_Store', '**/Thumbs.db'
