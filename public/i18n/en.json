@@ -1,4 +1,8 @@
 {
+  "应用内联机": "Connect within app",
+  "聊天记录（最近200条）": "Chat history (last 200 messages)",
+  "聊天记录": "Chat history",
+  "暂无聊天记录": "No messages yet",
   "离线导入（不下载官方数据表）": "Import offline (do not download official data tables)",
   "_meta": {
     "type": "lang",

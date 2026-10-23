@@ -1,5 +1,15 @@
 # META.md — match & meta engine (server/match)
 
+Local chat UI customization (2026-10-22): received `m.chat` text messages also populate a client-memory history
+(last 200, sender and local receipt time) in the persistent translucent main-screen chat panel (2026-10-23).
+The input is in the same panel; emote selection stays separate. No protocol or server retention changes; see
+[the client contract](design/client.md). Leaving or starting a match clears history.
+
+Multiplayer client-combat recovery: a final authoritative progress report without a normal/联防 result starts a
+3-second grace [ASSUMED], then server re-simulation through the usual field-release path. A valid result
+cancels recovery; mandatory verification and boss shared-pool rules are preserved. See
+[the network contract](design/network.md#recovery-when-a-completed-browsers-result-is-missing).
+
 Audience: **content authors** writing prep-side ("SERVER_*") effects in `server/sim/content/*.js → registerMeta(registry)`,
 the **UI owner** consuming `m.public` / `m.private` / `m.result`, and anyone driving matches in tests or tools.
 Normative contracts stay in DESIGN.md §6 and §8 ([design/match.md](design/match.md),

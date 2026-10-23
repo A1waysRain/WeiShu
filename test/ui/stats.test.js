@@ -139,9 +139,12 @@ describe('local stats: record building', () => {
 
   test('roomMode falls back to the modeId (single → solo, multi → coop, else null)', () => {
     assert.equal(roomModeOf('mode_multi_funny', null), 'coop');
-    assert.equal(roomModeOf('mode_single_normal', 'coop'), 'coop'); // explicit room mode wins
+    assert.equal(roomModeOf('mode_single_normal', 'coop'), 'solo'); // settlement mode wins over a stale room snapshot
+    assert.equal(roomModeOf('mode_training_1', 'coop10'), 'coop'); // custom mode IDs fall back to the room mode
     assert.equal(roomModeOf('mode_training_1', null), null);
     assert.equal(buildRecord(baseResult({ modeId: 'mode_multi_hard' }), { myId: 'p1', now: 1 }).roomMode, 'coop');
+    const staleSavedRecord = normalizeRecord({ ...baseResult(), roomMode: 'coop' });
+    assert.equal(staleSavedRecord.roomMode, 'solo', 'previously misclassified stored records are corrected on load');
   });
 });
 
@@ -448,6 +451,24 @@ describe('local stats: bounded storage', () => {
     assert.deepEqual(loadStats().records, []);
   });
 
+  test('Android app storage keeps statistics available when the embedded server port changes', () => {
+    const hadBridge = Object.hasOwn(globalThis, 'StrongholdAndroid');
+    const previousBridge = globalThis.StrongholdAndroid;
+    let stored = '';
+    globalThis.StrongholdAndroid = {
+      loadStats: () => stored,
+      saveStats: (value) => { stored = value; return true; },
+    };
+    try {
+      assert.equal(saveStats(manyRecords(1)), true);
+      assert.equal(JSON.parse(stored).records.length, 1);
+      assert.equal(loadStats().records.length, 1, 'the app-private copy loads without the previous WebView origin');
+    } finally {
+      if (hadBridge) globalThis.StrongholdAndroid = previousBridge;
+      else delete globalThis.StrongholdAndroid;
+    }
+  });
+
   test('every string and list of an (imported) record is bounded', () => {
     const rec = normalizeRecord({
       players: Array.from({ length: 30 }, (_, i) => ({
@@ -745,8 +766,8 @@ describe('local stats: aggregation (what the page renders)', () => {
 
   test('mode rows separate successful defense from hidden-core clears and use the player outcome', () => {
     const solo = buildRecord(baseResult({ hiddenCleared: false }), { myId: 'p1', roomMode: 'solo', now: 1 });
-    const coop = buildRecord(baseResult(), { myId: 'p1', roomMode: 'coop', now: 2 });
-    const eliminated = buildRecord(baseResult(), { myId: 'p2', roomMode: 'coop', now: 3 });
+    const coop = buildRecord(baseResult({ modeId: 'mode_multi_hard' }), { myId: 'p1', roomMode: 'coop', now: 2 });
+    const eliminated = buildRecord(baseResult({ modeId: 'mode_multi_hard' }), { myId: 'p2', roomMode: 'coop', now: 3 });
     const summary = aggregateStats([solo, coop, eliminated]);
     assert.deepEqual(summary.byMode.solo, { games: 1, wins: 1, hiddenCleared: 0 }, 'failing the hidden core keeps the final-boss win');
     assert.deepEqual(summary.byMode.coop, { games: 2, wins: 1, hiddenCleared: 1 }, 'an eliminated teammate gets neither a personal clear nor a breakthrough');

@@ -2,6 +2,19 @@
 
 Part of [DESIGN.md](../DESIGN.md) (the index; section numbers are global).
 
+Local customization (2026-10-23): a translucent, always-visible chat panel between the member list and the bottom-left
+emote controls includes the input and a scrollable history of the last 200 received text
+messages in the current match, with sender names captured at receipt and local receipt times. Avatar bubbles
+remain unchanged. History follows new messages only while at the bottom; scrolling up holds the reading position.
+It is held in browser memory, survives same-page reconnects, and clears on leaving the room or
+starting a new match. Reloading the page or restarting the app clears it; no server backlog is requested.
+The emote picker only contains emotes. Scrollable member lists reserve no permanent bubble gutter, use a thin
+scrollbar and show transient bubbles over the member row rather than blocking a strip of battlefield tiles.
+
+Android customization (2026-10-23): title and lobby show 应用内联机 when the native
+`StrongholdAndroid.connectToHost` bridge is available. It opens the existing native address dialog, retaining
+in-WebView play and the native return-to-local flow; normal browsers do not show this action.
+
 ## 9. Client rendering contract (public/js/render)
 
 **Operator skins (§34.23, [SKINS.md](../SKINS.md)).** [ASSUMED] Retain received skin IDs separately from displayed

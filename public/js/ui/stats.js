@@ -1,5 +1,5 @@
 // Local match statistics: every match the local player took part in is appended as one record to localStorage
-// (`sp.pref.stats`). Per-browser only — the server keeps matches in memory and has no identity, so there is nowhere
+// (`sp.pref.stats`), or Android's app-private preferences when running in the APK. Per-device only — the server keeps matches in memory and has no identity, so there is nowhere
 // else for cross-match numbers to live; nothing here is ever sent anywhere. The stats page labels itself 本机数据 and
 // offers JSON export / import for moving between devices. (Ported from PR #323 by @2321Robin, reworked for 0.2.2.)
 //
@@ -235,7 +235,8 @@ export function normalizeRecord(raw) {
     seed: num(r.seed),
     durationMs: num(r.durationMs),
     teamLp: num(r.teamLp),
-    roomMode: r.roomMode === 'solo' || r.roomMode === 'coop' || r.roomMode === 'coop10' ? 'coop' : null,
+    // The settlement mode identifies the match that actually ran. A stale room snapshot must not reclassify it.
+    roomMode: roomModeOf(str(r.modeId), r.roomMode),
     selfId: str(r.selfId),
     // the room's cosmetic plugins (see the header): its visual set, null without any (or a record from before 0.3.0)
     vs: vsOf(r.vs),
@@ -307,6 +308,10 @@ export function migrateStats(raw) {
 
 /** Read the raw stored string (null when absent or unreadable). */
 function readRaw() {
+  try {
+    const native = globalThis.StrongholdAndroid?.loadStats?.();
+    if (typeof native === 'string' && native) return native;
+  } catch { /* browser fallback */ }
   try { return globalThis.localStorage?.getItem(FULL_KEY) ?? null; } catch { return null; }
 }
 
@@ -403,12 +408,14 @@ export function saveStats(stats) {
   if (stats.newer) return false;
   let recs = fitToBudget(stats.records.filter(r => r.test !== true));
   for (;;) {
+    const raw = JSON.stringify({ v: STATS_VERSION, records: recs });
+    let saved = false;
+    try { saved = globalThis.StrongholdAndroid?.saveStats?.(raw) === true; } catch { /* browser fallback */ }
     try {
       const ls = globalThis.localStorage;
-      if (!ls) return false; // no storage at all (disabled by the browser)
-      ls.setItem(FULL_KEY, JSON.stringify({ v: STATS_VERSION, records: recs }));
-      return true;
+      if (ls) { ls.setItem(FULL_KEY, raw); saved = true; }
     } catch { /* quota or storage disabled — fall through to shrinking */ }
+    if (saved) return true;
     if (recs.length <= 8) return false; // a small history that still does not fit is foreign quota pressure
     recs = recs.slice(0, Math.max(8, Math.ceil(recs.length / 2)));
   }
@@ -421,10 +428,11 @@ export function saveStats(stats) {
  * @returns {'solo'|'coop'|null}
  */
 export function roomModeOf(modeId, roomMode) {
-  if (roomMode === 'solo' || roomMode === 'coop') return roomMode;
-  if (typeof modeId !== 'string') return null;
-  if (modeId.includes('_single_')) return 'solo';
-  if (modeId.includes('_multi_')) return 'coop';
+  if (typeof modeId === 'string') {
+    if (modeId.includes('_single_')) return 'solo';
+    if (modeId.includes('_multi_')) return 'coop';
+  }
+  if (roomMode === 'solo' || roomMode === 'coop' || roomMode === 'coop10') return roomMode === 'solo' ? 'solo' : 'coop';
   return null;
 }
 

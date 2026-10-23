@@ -142,8 +142,8 @@
 }
 .ebubble.ebubble--chat::before { content: none; }
 .ebubble.ebubble--chat::after { left: -.13rem; top: calc(50% - .08rem); background: rgba(24, 30, 28, .97); }
-.team--scroll.team--chat .team__row { margin-right: 2.2rem; }
-.team--scroll .ebubble.ebubble--chat { width: 2.08rem; max-width: 2.08rem; max-height: .82rem; overflow-y: auto; pointer-events: auto; }
+.team--scroll .ebubble.team__bubble { left: .7rem; top: 50%; z-index: 4; }
+.team--scroll .ebubble.ebubble--chat { width: auto; max-width: 1.55rem; max-height: .72rem; overflow: hidden; pointer-events: none; }
 .echat__tabs {
   position: absolute; bottom: 100%; left: .15rem; display: flex; gap: .06rem;
   background: #111b16; padding: .04rem; border: 1px solid var(--line-2);
@@ -162,6 +162,31 @@
 .echat__footer { display: flex; justify-content: space-between; align-items: center; color: var(--text-lo); font-size: max(.14rem, 12px); }
 .echat__footer button { min-width: 64px; min-height: 36px; padding: .08rem .2rem; color: var(--mint-400); border: 1px solid var(--mint-700); }
 .echat__footer button:disabled { opacity: .4; }
+.echat__heading { color: var(--mint-400); font-size: max(.15rem, 12px); }
+.echat__history { height: min(2.6rem, 32dvh); min-height: 60px; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; border-bottom: 1px solid var(--line-2); user-select: text; -webkit-user-select: text; }
+.echat__entry { padding: max(.08rem, 5px) 0; }
+.echat__meta { display: flex; justify-content: space-between; gap: 8px; color: var(--mint-400); font-size: max(.14rem, 12px); }
+.echat__meta span { overflow-wrap: anywhere; min-width: 0; }
+.echat__meta time { color: var(--text-lo); flex-shrink: 0; }
+.echat__text { color: var(--text-md); font-size: max(.16rem, 13px); overflow-wrap: anywhere; white-space: pre-wrap; }
+.echat__empty { color: var(--text-lo); font-size: max(.15rem, 12px); padding: .1rem 0; }
+
+/* The chat sits above the bottom-left controls, below the member list. Its footprint stays narrow on phones. */
+.chat-dock { position: absolute; left: .24rem; bottom: 1rem; width: min(2.75rem, 28vw); height: min(1.85rem, 28dvh); box-sizing: border-box; padding: .08rem; background: rgba(9, 20, 15, .48); border: 1px solid rgba(137, 218, 184, .22); border-radius: .05rem; }
+.chat-dock .echat__form { height: 100%; gap: .04rem; }
+.chat-dock .echat__heading { font-size: max(.12rem, 10px); }
+.chat-dock .echat__history { flex: 1; height: auto; min-height: 0; }
+.chat-dock .echat__entry { padding: .03rem 0; }
+.chat-dock .echat__meta { font-size: max(.12rem, 10px); }
+.chat-dock .echat__text { font-size: max(.14rem, 11px); }
+.chat-dock .echat__form input { min-height: 26px; height: .3rem; padding: .02rem .06rem; font-size: max(.14rem, 12px); background: rgba(4, 12, 8, .45); padding-right: max(.6rem, 48px); }
+.chat-dock .echat__footer { position: absolute; bottom: .08rem; right: .08rem; }
+.chat-dock .echat__footer > span { display: none; }
+.chat-dock .echat__footer button { min-height: 26px; height: .3rem; min-width: 44px; padding: .02rem .08rem; background: rgba(9, 20, 15, .6); }
+@media (max-width: 767px) {
+  .gm:not(.is-collapsed) .chat-dock { bottom: 1.75rem; }
+  .gm:not(.is-collapsed) .team--scroll { max-height: min(3.82rem, calc(100% - 6.3rem)); }
+}
 
 @keyframes emo-panel-in { from { opacity: 0; transform: translateY(.06rem) scale(.96); } }
 @keyframes emo-page-in { from { opacity: 0; } }

@@ -196,7 +196,7 @@ test('takeover: an authority that disconnects mid-combat loses its field; the se
 });
 
 test('takeover: a connected client that never reports is taken over at time limit + 15 s grace; departed players are settled at once', () => {
-  const h = makeMatch({ mode: 'coop', humans: 3, seed: 9106, captureFrames: false, clientCombat: true, instant: false, perPlayer: { p_2: { stall: true } } });
+  const h = makeMatch({ mode: 'coop', humans: 3, seed: 9106, captureFrames: false, clientCombat: true, instant: false, perPlayer: { p_2: { mute: true } } });
   h.autoHumans();
   const m = h.m;
   m.start();

@@ -151,7 +151,7 @@ function backToLobby() {
   clearTimeout(restoreTimer);
   const s = store.get();
   if (s.room || s.match.public) closeAllDialogs();
-  store.set({ room: null, match: emptyMatch(), ticker: [], emotes: [] });
+  store.set({ room: null, match: emptyMatch(), ticker: [], emotes: [], chatHistory: [] });
   store.patch('ui', { restoring: false });
 }
 
@@ -206,12 +206,12 @@ function onRoomState(msg) {
   if (myId != null && seats.length && !seats.some((s) => s && s.playerId === myId) && !isSpectating(room, myId)) {
     // We are no longer seated (kicked / left elsewhere) — neither in a player seat nor a spectator seat.
     if (store.get().room) toast(t('你已不在该同盟中'), 'warn');
-    store.set({ room: null, match: emptyMatch() });
+    store.set({ room: null, match: emptyMatch(), chatHistory: [] });
     return;
   }
   const prevRoom = store.get().room;
   // A (new) match starts: forget the previous match's state so stale results never show.
-  if (room.inMatch && !(prevRoom && prevRoom.inMatch && prevRoom.code === room.code)) store.set({ match: emptyMatch() });
+  if (room.inMatch && !(prevRoom && prevRoom.inMatch && prevRoom.code === room.code)) store.set({ match: emptyMatch(), chatHistory: [] });
   store.set({ room });
   identity.rememberMatch(room.inMatch && seats.some((seat) => seat?.playerId === myId)
     ? { name: store.get().me.name, code: room.code || '' } : null);
@@ -289,7 +289,13 @@ function wireNet() {
     store.set((s) => ({ emotes: [...s.emotes.slice(-(EMOTE_KEEP - 1)), { seq: ++seq, playerId: msg.playerId, id: msg.id, at: Date.now() }] }));
   });
   net.on('m.chat', (msg) => {
-    store.set((s) => ({ emotes: [...s.emotes.slice(-(EMOTE_KEEP - 1)), { seq: ++seq, playerId: msg.playerId, text: msg.text, at: Date.now() }] }));
+    if (typeof msg.text !== 'string' || typeof msg.playerId !== 'string') return;
+    store.set((s) => {
+      const player = s.match.public?.players?.find((p) => p.playerId === msg.playerId)
+        || s.room?.seats?.find((p) => p?.playerId === msg.playerId);
+      const entry = { seq: ++seq, playerId: msg.playerId, name: player?.name || msg.playerId, text: msg.text, at: Date.now() };
+      return { emotes: [...s.emotes.slice(-(EMOTE_KEEP - 1)), entry], chatHistory: [...s.chatHistory.slice(-199), entry] };
+    });
   });
 
   // Entering (title → lobby) while already online also needs the deep-link join.

@@ -45,6 +45,17 @@ export class MatchReports {
     if (Number.isFinite(msg.leaks)) p.leaks = Math.max(p.leaks, msg.leaks);
     // 联防: the leakers' enemies still standing (the latest report; clamped where it is read, _uniteLeft)
     if (f.kind === 'unite' && msg.left && typeof msg.left === 'object') p.left = { ...msg.left };
+    // [ASSUMED] Allow 3 s for the result following a final progress report. A missing / structurally refused
+    // result must not leave an already-finished browser waiting for the full combat deadline. Never settle
+    // from `done` alone: re-simulate the authoritative spec instead. Boss fields retain their shared-pool rules.
+    if (!this.isSolo && msg.done === true && !f.resultWaitTimer) {
+      f.resultWaitTimer = this.later(3000, () => {
+        f.resultWaitTimer = null;
+        if (f.done || f.verifyJob || f.mode !== 'client' || !this.fields.includes(f)) return;
+        this.log.warn?.(`[match ${this.roomCode}] ${f.fieldId}: final progress without result — server re-simulation`);
+        this._runOnServer(f, 'missing-result');
+      });
+    }
     this.markPublic();
     return OK;
   }

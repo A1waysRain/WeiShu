@@ -25,7 +25,7 @@ import { CHAT_MAX_LENGTH, CHAT_COOLDOWN_MS, CHAT_BUBBLE_MS, normalizeChat } from
 import { html } from './components.js';
 import { GIcon } from './gameComponents.js';
 import { data, useData, localAsset, artUrls, nextArtUrl } from '../data.js';
-import { loadPref, savePref } from '../store.js';
+import { loadPref, savePref, useStore } from '../store.js';
 import { t } from '../../../shared/i18n.js';
 
 const cx = (...p) => p.flat().filter(Boolean).join(' ');
@@ -207,32 +207,12 @@ export function EmoteBubble({ id, text, class: cls, ttl = EMOTE_BUBBLE_MS, at })
 /**
  * 交流 button + emote panel.
  * @param {{ onSend: (id:string)=>void, open: boolean, onToggle: (open:boolean)=>void, disabled?: boolean,
- *   cooldownMs?: number, onChat?: (text:string)=>Promise<boolean> }} props
+ *   cooldownMs?: number }} props
  */
-export function EmoteWheel({ onSend, onChat, open, onToggle, disabled = false, cooldownMs = EMOTE_COOLDOWN_MS }) {
+export function EmoteWheel({ onSend, open, onToggle, disabled = false, cooldownMs = EMOTE_COOLDOWN_MS }) {
   useData('local');
   useEffect(() => { ensureEmoteCss(); }, []);
   const [page, setPage] = useState(lastThemeIndex);
-  const [mode, setMode] = useState('emote');
-  const [draft, setDraft] = useState('');
-  const [sending, setSending] = useState(false);
-  const chatAt = useRef(-Infinity);
-  const composing = useRef(false);
-  const chatBusy = useRef(false);
-  const sendChat = async (e) => {
-    e?.preventDefault();
-    const text = normalizeChat(draft);
-    if (!text || disabled || !onChat || chatBusy.current || composing.current || Date.now() - chatAt.current < CHAT_COOLDOWN_MS) return;
-    chatBusy.current = true;
-    setSending(true);
-    try {
-      if (await onChat(text)) {
-        chatAt.current = Date.now();
-        setDraft('');
-        onToggle(false);
-      }
-    } finally { chatBusy.current = false; setSending(false); }
-  };
   const [dir, setDir] = useState(0);          // direction of the last page change (slide-in animation)
   const [dx, setDx] = useState(0);            // live drag offset (px)
   const [cooling, setCooling] = useState(() => cooldownLeft(lastSentAt, Date.now(), cooldownMs) > 0);
@@ -253,7 +233,6 @@ export function EmoteWheel({ onSend, onChat, open, onToggle, disabled = false, c
   // reopen on the last used theme
   useEffect(() => {
     if (open) { setPage(lastThemeIndex()); setDir(0); setDx(0); }
-    else composing.current = false;
   }, [open]);
 
   // cooldown: the button is greyed for chatCD after a send (from the send time, so a remounted wheel keeps it)
@@ -338,13 +317,8 @@ export function EmoteWheel({ onSend, onChat, open, onToggle, disabled = false, c
       aria-expanded=${open ? 'true' : 'false'} aria-haspopup="dialog" disabled=${disabled || cooling}>
       ${btnSprite ? null : html`<${GIcon} name="emote" />`}<span class="ewheel__label">${t('交流')}</span>
     </button>
-    ${open ? html`<div class=${cx('ewheel__panel', mode === 'chat' && 'echat', mode !== 'chat' && panelBg && 'has-sprite', cellBg && 'has-cell')} style=${panelStyle} role="dialog" aria-label=${t('交流')}>
-      ${onChat ? html`<div class="echat__tabs"><button type="button" onClick=${() => setMode('emote')}>${t('表情')}</button><button type="button" onClick=${() => setMode('chat')}>${t('文字')}</button></div>` : null}
-      ${mode === 'chat' && onChat ? html`<form class="echat__form" onSubmit=${sendChat}>
-        <input value=${draft} maxLength=${CHAT_MAX_LENGTH} aria-label=${t('消息')} onInput=${(e) => setDraft(e.currentTarget.value)}
-          onCompositionStart=${() => { composing.current = true; }} onCompositionEnd=${() => { composing.current = false; }} />
-        <div class="echat__footer"><span>${draft.length}/${CHAT_MAX_LENGTH}</span><button type="submit" disabled=${disabled || sending || !normalizeChat(draft)}>${t('发送')}</button></div>
-      </form>` : html`<div class="ewheel__viewport" onPointerDown=${onPointerDown} onPointerMove=${onPointerMove}
+    ${open ? html`<div class=${cx('ewheel__panel', panelBg && 'has-sprite', cellBg && 'has-cell')} style=${panelStyle} role="dialog" aria-label=${t('交流')}>
+      <div class="ewheel__viewport" onPointerDown=${onPointerDown} onPointerMove=${onPointerMove}
         onPointerUp=${(e) => endDrag(e, false)} onPointerCancel=${(e) => endDrag(e, true)} onWheel=${onWheel}>
         <div key=${theme.themeId} class=${cx('ewheel__page', dir > 0 && 'is-from-right', dir < 0 && 'is-from-left', dx !== 0 && 'is-dragging')}
           style=${dx ? `transform:translateX(${dx}px)` : ''} role="group" aria-label=${t(theme.name)} data-theme=${theme.themeId}>
@@ -360,7 +334,54 @@ export function EmoteWheel({ onSend, onChat, open, onToggle, disabled = false, c
         ${EMOTE_THEMES.map((th, i) => html`<button key=${th.themeId} type="button" role="tab" class=${cx('ewheel__dot', i === page && 'is-on')}
           aria-selected=${i === page ? 'true' : 'false'} aria-label=${`${t(th.name)} ${i + 1}/${EMOTE_THEMES.length}`} onClick=${() => go(i)}></button>`)}
       </div>
-      `}
     </div>` : null}
   </div>`;
+}
+
+/** Always-visible in-match text chat, independent of the emote picker. */
+export function ChatPanel({ onChat, disabled = false, readOnly = false }) {
+  useEffect(() => { ensureEmoteCss(); }, []);
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const history = useStore((s) => s.chatHistory);
+  const historyEnd = useRef(null);
+  const followHistory = useRef(true);
+  useEffect(() => {
+    if (followHistory.current) historyEnd.current?.scrollIntoView({ block: 'nearest' });
+  }, [history]);
+  const chatAt = useRef(-Infinity);
+  const composing = useRef(false);
+  const chatBusy = useRef(false);
+  const sendChat = async (e) => {
+    e?.preventDefault();
+    const text = normalizeChat(draft);
+    if (!text || disabled || !onChat || chatBusy.current || composing.current || Date.now() - chatAt.current < CHAT_COOLDOWN_MS) return;
+    chatBusy.current = true;
+    setSending(true);
+    try {
+      if (await onChat(text)) {
+        chatAt.current = Date.now();
+        setDraft('');
+        followHistory.current = true;
+      }
+    } finally { chatBusy.current = false; setSending(false); }
+  };
+  return html`<aside class="chat-dock" aria-label=${t('聊天记录')}>
+<form class="echat__form" onSubmit=${sendChat}>
+        <div class="echat__heading">${t('聊天记录（最近200条）')}</div>
+        <div class="echat__history" aria-label=${t('聊天记录')} onScroll=${(e) => {
+          const el = e.currentTarget;
+          followHistory.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        }}>
+          ${history.length ? history.map((entry) => html`<div class="echat__entry" key=${entry.seq}>
+            <div class="echat__meta"><span>${entry.name}</span><time>${new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>
+            <div class="echat__text">${entry.text}</div>
+          </div>`) : html`<div class="echat__empty">${t('暂无聊天记录')}</div>`}
+          <div ref=${historyEnd}></div>
+        </div>
+        ${readOnly ? null : html`<input value=${draft} maxLength=${CHAT_MAX_LENGTH} aria-label=${t('消息')} onInput=${(e) => setDraft(e.currentTarget.value)}
+          onCompositionStart=${() => { composing.current = true; }} onCompositionEnd=${() => { composing.current = false; }} />
+        <div class="echat__footer"><span>${draft.length}/${CHAT_MAX_LENGTH}</span><button type="submit" disabled=${disabled || sending || !normalizeChat(draft)}>${t('发送')}</button></div>`}
+      </form>
+  </aside>`;
 }

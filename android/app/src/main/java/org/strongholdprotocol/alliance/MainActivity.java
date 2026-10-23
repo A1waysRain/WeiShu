@@ -573,6 +573,22 @@ public final class MainActivity extends Activity {
                         .edit().putString("match-history", value).commit();
             } catch (org.json.JSONException error) { return false; }
         }
+        @JavascriptInterface public String loadStats() {
+            if (activeOrigin == null || !activeOrigin.equals(localOrigin())) return "";
+            return getSharedPreferences("game-preferences", MODE_PRIVATE).getString("stats", "");
+        }
+        @JavascriptInterface public boolean saveStats(String value) {
+            if (activeOrigin == null || !activeOrigin.equals(localOrigin())) return false;
+            if (value == null || value.length() > 1_600_000) return false;
+            try {
+                org.json.JSONObject parsed = new org.json.JSONObject(value);
+                org.json.JSONArray records = parsed.optJSONArray("records");
+                int version = parsed.optInt("v");
+                if (version < 1 || version > 2 || records == null || records.length() > 1000) return false;
+                return getSharedPreferences("game-preferences", MODE_PRIVATE)
+                        .edit().putString("stats", value).commit();
+            } catch (org.json.JSONException error) { return false; }
+        }
         @JavascriptInterface public String lanOrigin() { return MainActivity.this.lanOrigin(); }
         @JavascriptInterface public String safeInsets() { return cachedSafeInsets; }
         @JavascriptInterface public String overlayOrigin() { return MainActivity.this.networkOrigin(true); }

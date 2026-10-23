@@ -27,7 +27,7 @@ export class MatchClientCombat {
 
   _clearFieldTimers(f) {
     if (!f || !f.cc) return;
-    for (const k of ['deadlineTimer', 'doneTimer', 'waitTimer', 'sliceTimer', 'verifyTimer']) if (f[k]) { this.cancel(f[k]); f[k] = null; }
+    for (const k of ['deadlineTimer', 'doneTimer', 'waitTimer', 'sliceTimer', 'verifyTimer', 'resultWaitTimer']) if (f[k]) { this.cancel(f[k]); f[k] = null; }
     f.job = null;
     f.verifyJob = null;
   }
@@ -51,7 +51,7 @@ export class MatchClientCombat {
       // real report, so `resolved ?? killed` fallbacks (an unreported field, a synthetic result) keep working — a 0 here
       // would read as "nothing resolved yet" and could never be told apart from a reported 0.
       progress: { gt: 0, killed: 0, total, leaks: 0, resolved: null, done: false }, lastProgressAt: this.sched.now(),
-      bossAcked: 0, bossBy: {}, lpAcked: 0, lpCum: 0, deadlineTimer: null, doneTimer: null, waitTimer: null,
+      bossAcked: 0, bossBy: {}, lpAcked: 0, lpCum: 0, deadlineTimer: null, doneTimer: null, waitTimer: null, resultWaitTimer: null,
       // boss fields: the latest client reports (re-credited as the plausibility budget grows), the server run's
       // CreditPool, humans demoted for an implausible result (never the authority of this field again), a 'cleared'
       // b.result waiting for the budget to credit the pool it emptied (`heldResult`, _onResult); `leaksBy`: the authority's
