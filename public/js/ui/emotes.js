@@ -341,6 +341,7 @@ export function EmoteWheel({ onSend, open, onToggle, disabled = false, cooldownM
 /** Always-visible in-match text chat, independent of the emote picker. */
 export function ChatPanel({ onChat, disabled = false, readOnly = false }) {
   useEffect(() => { ensureEmoteCss(); }, []);
+  const [collapsed, setCollapsed] = useState(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const history = useStore((s) => s.chatHistory);
@@ -366,9 +367,13 @@ export function ChatPanel({ onChat, disabled = false, readOnly = false }) {
       }
     } finally { chatBusy.current = false; setSending(false); }
   };
-  return html`<aside class="chat-dock" aria-label=${t('聊天记录')}>
-<form class="echat__form" onSubmit=${sendChat}>
-        <div class="echat__heading">${t('聊天记录（最近200条）')}</div>
+  return html`<aside class=${cx('chat-dock', collapsed && 'is-collapsed')} aria-label=${t('聊天记录')}>
+    <div class="chat-dock__head">
+      <div class="echat__heading">${t('聊天记录（最近200条）')}</div>
+      <button type="button" class="chat-dock__toggle" aria-expanded=${!collapsed} aria-controls="chat-dock-content"
+        aria-label=${collapsed ? t('展开聊天框') : t('收起聊天框')} onClick=${() => setCollapsed(!collapsed)}>${collapsed ? t('展开聊天框') : t('收起聊天框')}</button>
+    </div>
+    ${collapsed ? null : html`<form id="chat-dock-content" class="echat__form" onSubmit=${sendChat}>
         <div class="echat__history" aria-label=${t('聊天记录')} onScroll=${(e) => {
           const el = e.currentTarget;
           followHistory.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
@@ -382,6 +387,6 @@ export function ChatPanel({ onChat, disabled = false, readOnly = false }) {
         ${readOnly ? null : html`<input value=${draft} maxLength=${CHAT_MAX_LENGTH} aria-label=${t('消息')} onInput=${(e) => setDraft(e.currentTarget.value)}
           onCompositionStart=${() => { composing.current = true; }} onCompositionEnd=${() => { composing.current = false; }} />
         <div class="echat__footer"><span>${draft.length}/${CHAT_MAX_LENGTH}</span><button type="submit" disabled=${disabled || sending || !normalizeChat(draft)}>${t('发送')}</button></div>`}
-      </form>
+      </form>`}
   </aside>`;
 }

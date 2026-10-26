@@ -171,20 +171,37 @@
 .echat__text { color: var(--text-md); font-size: max(.16rem, 13px); overflow-wrap: anywhere; white-space: pre-wrap; }
 .echat__empty { color: var(--text-lo); font-size: max(.15rem, 12px); padding: .1rem 0; }
 
-/* The chat sits above the bottom-left controls, below the member list. Its footprint stays narrow on phones. */
-.chat-dock { position: absolute; left: .24rem; bottom: 1rem; width: min(2.75rem, 28vw); height: min(1.85rem, 28dvh); box-sizing: border-box; padding: .08rem; background: rgba(9, 20, 15, .48); border: 1px solid rgba(137, 218, 184, .22); border-radius: .05rem; }
-.chat-dock .echat__form { height: 100%; gap: .04rem; }
-.chat-dock .echat__heading { font-size: max(.12rem, 10px); }
+/* The always-visible chat is legible on phones and has its own collapse control. */
+.chat-dock { position: absolute; left: .24rem; bottom: 1rem; width: min(4.2rem, 40vw); height: min(2.65rem, 40dvh); box-sizing: border-box; padding: .1rem; background: rgba(9, 20, 15, .78); border: 1px solid rgba(137, 218, 184, .32); border-radius: .06rem; display: flex; flex-direction: column; gap: .06rem; }
+.chat-dock__head { display: flex; align-items: center; justify-content: space-between; gap: .12rem; min-height: .27rem; }
+.chat-dock .chat-dock__toggle { flex: 0 0 auto; min-height: 26px; padding: .02rem .1rem; color: var(--mint-400); background: rgba(9, 20, 15, .7); border: 1px solid var(--mint-700); border-radius: .04rem; font-size: max(.13rem, 11px); }
+.chat-dock .echat__form { min-height: 0; flex: 1; gap: .06rem; }
+.chat-dock .echat__heading { font-size: max(.14rem, 12px); }
 .chat-dock .echat__history { flex: 1; height: auto; min-height: 0; }
-.chat-dock .echat__entry { padding: .03rem 0; }
-.chat-dock .echat__meta { font-size: max(.12rem, 10px); }
-.chat-dock .echat__text { font-size: max(.14rem, 11px); }
-.chat-dock .echat__form input { min-height: 26px; height: .3rem; padding: .02rem .06rem; font-size: max(.14rem, 12px); background: rgba(4, 12, 8, .45); padding-right: max(.6rem, 48px); }
-.chat-dock .echat__footer { position: absolute; bottom: .08rem; right: .08rem; }
+.chat-dock .echat__entry { padding: .05rem 0; }
+.chat-dock .echat__meta { font-size: max(.14rem, 12px); }
+.chat-dock .echat__text { font-size: max(.17rem, 14px); }
+.chat-dock .echat__form input { min-height: 32px; height: .38rem; padding: .03rem .08rem; font-size: max(.16rem, 14px); background: rgba(4, 12, 8, .7); padding-right: max(.7rem, 52px); }
+.chat-dock .echat__footer { position: absolute; bottom: .1rem; right: .1rem; }
 .chat-dock .echat__footer > span { display: none; }
-.chat-dock .echat__footer button { min-height: 26px; height: .3rem; min-width: 44px; padding: .02rem .08rem; background: rgba(9, 20, 15, .6); }
+.chat-dock .echat__footer button { min-height: 30px; height: .36rem; min-width: 48px; padding: .02rem .1rem; background: rgba(9, 20, 15, .8); }
+.chat-dock.is-collapsed { width: min(2.7rem, 34vw); height: auto; min-height: .48rem; padding: .06rem .1rem; }
+.chat-dock.is-collapsed .chat-dock__head { min-height: .34rem; }
 @media (max-width: 767px) {
-  .gm:not(.is-collapsed) .chat-dock { bottom: 1.75rem; }
+  /* Align the right edge with the rightmost button in the lower-left mobile rules/control row
+     (.gm__corner in devices.css: three 34px touch controls plus their gaps). The old panel was
+     min(1.85rem, 28dvh) high; 3.2375rem is exactly 1.75× its original rem height. */
+  .chat-dock { left: max(.12rem, env(safe-area-inset-left)); bottom: max(1rem, env(safe-area-inset-bottom));
+    width: calc(.24rem + max(96px, calc(3 * max(.56rem, 34px) + .2rem)) - max(.12rem, env(safe-area-inset-left)));
+    height: 3.2375rem; padding: .1rem; background: rgba(9, 20, 15, .88); }
+  .chat-dock__head { min-height: .36rem; }
+  .chat-dock .echat__heading { font-size: max(.18rem, 14px); }
+  .chat-dock .echat__meta { font-size: max(.16rem, 13px); }
+  .chat-dock .echat__text { font-size: max(.2rem, 15px); line-height: 1.35; }
+  .chat-dock .echat__form input { min-height: 38px; height: .44rem; font-size: max(.2rem, 16px); }
+  .chat-dock .echat__footer button, .chat-dock .chat-dock__toggle { min-height: 34px; font-size: max(.17rem, 13px); }
+  .chat-dock.is-collapsed { width: min(3rem, 48vw); height: auto; min-height: .54rem; }
+  .gm:not(.is-collapsed) .chat-dock { bottom: max(1.75rem, calc(env(safe-area-inset-bottom) + 1.25rem)); }
   .gm:not(.is-collapsed) .team--scroll { max-height: min(3.82rem, calc(100% - 6.3rem)); }
 }
 

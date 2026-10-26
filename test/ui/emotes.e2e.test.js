@@ -394,4 +394,50 @@ describe('official emotes in the browser', { skip: !ENABLED && 'set SP_E2E=1 (an
     assert.deepEqual(problems, []);
     await page.close();
   });
+
+  test('chat dock can collapse and expand without losing its draft or history, with a readable phone footprint', async () => {
+    const { page, problems } = await open('/dev/game-mock.html', { w: 900, h: 600 });
+    await page.evaluate(async () => {
+      const { render } = await import('preact');
+      const { html } = await import('/js/ui/components.js');
+      const { ChatPanel } = await import('/js/ui/emotes.js');
+      const { store } = await import('/js/store.js');
+      store.set({ chatHistory: [{ seq: 1, name: '测试博士', at: Date.now(), text: '历史消息保留' }] });
+      const host = document.createElement('div');
+      host.id = 'chat-probe';
+      host.style.cssText = 'position:fixed;inset:0;pointer-events:none';
+      document.body.append(host);
+      render(html`<${ChatPanel} onChat=${async () => true} />`, host);
+    });
+    await page.waitForSelector('#chat-probe .chat-dock');
+    await page.type('#chat-probe .echat__form input', '草稿不丢');
+    const before = await page.$eval('#chat-probe .chat-dock', (el) => ({ width: getComputedStyle(el).width, height: getComputedStyle(el).height }));
+    await page.click('#chat-probe .chat-dock__toggle');
+    assert.equal(await page.$eval('#chat-probe .chat-dock', (el) => el.classList.contains('is-collapsed')), true);
+    assert.equal(await page.$eval('#chat-probe .chat-dock__toggle', (el) => el.getAttribute('aria-expanded')), 'false');
+    assert.equal(await page.$eval('#chat-probe .chat-dock').then((el) => el.$('.echat__history')), null, 'history panel is hidden when collapsed');
+    await page.click('#chat-probe .chat-dock__toggle');
+    assert.equal(await page.$eval('#chat-probe .echat__form input', (el) => el.value), '草稿不丢');
+    assert.equal(await page.$eval('#chat-probe .echat__text', (el) => el.textContent), '历史消息保留');
+    assert.ok(parseFloat(before.width) > 0 && parseFloat(before.height) > 0);
+    assert.deepEqual(problems, []);
+    await page.close();
+
+    const phone = await browser.newPage();
+    await phone.setViewport({ width: 740, height: 360, isMobile: true, hasTouch: true });
+    await phone.goto(`${base}/dev/game-mock.html`, { waitUntil: 'networkidle0' });
+    await phone.evaluate(async () => {
+      const { render } = await import('preact');
+      const { html } = await import('/js/ui/components.js');
+      const { ChatPanel } = await import('/js/ui/emotes.js');
+      const host = document.createElement('div');
+      host.id = 'chat-probe'; host.style.cssText = 'position:fixed;inset:0;pointer-events:none'; document.body.append(host);
+      render(html`<${ChatPanel} onChat=${async () => true} />`, host);
+    });
+    const phoneSize = await phone.$eval('#chat-probe .chat-dock', (el) => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height, font: parseFloat(getComputedStyle(el.querySelector('.echat__text')).fontSize) }));
+    assert.ok(phoneSize.width >= 300, JSON.stringify(phoneSize));
+    assert.ok(phoneSize.height >= 150, JSON.stringify(phoneSize));
+    assert.ok(phoneSize.font >= 14, JSON.stringify(phoneSize));
+    await phone.close();
+  });
 });

@@ -20,11 +20,25 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const readJson = (rel) => JSON.parse(readFileSync(path.join(ROOT, rel), 'utf8'));
 const tryJson = (rel) => { try { return readJson(rel); } catch { return null; } };
 const EMOTES_JSON = readJson('data/emotes.json');
+const chatUi = readFileSync(path.join(ROOT, 'public/js/ui/emotes.js'), 'utf8');
+const chatCss = readFileSync(path.join(ROOT, 'public/css/emotes.css'), 'utf8');
 
 const ENABLED = ['emoticon_autochess_basic', 'emoticon_originium_slug', 'emoticon_autochess_basic_2',
   'emoticon_foolsday_doctor', 'emoticon_foolsday_amiya', 'emoticon_foolsday_wisdel'];
 
 describe('emote catalog (shared/constants.js)', () => {
+  test('chat dock has an accessible collapse toggle and a readable responsive mobile footprint', () => {
+    assert.ok(chatUi.includes('const [collapsed, setCollapsed] = useState(false)'));
+    assert.ok(chatUi.includes('aria-expanded=${!collapsed}'));
+    assert.ok(chatUi.includes('aria-controls="chat-dock-content"'));
+    assert.ok(chatUi.includes('collapsed ? null : html`<form id="chat-dock-content"'));
+    assert.ok(chatCss.includes('.chat-dock.is-collapsed'));
+    assert.ok(chatCss.includes('@media (max-width: 767px)'));
+    assert.ok(chatCss.includes('max(96px, calc(3 * max(.56rem, 34px) + .2rem))'));
+    assert.ok(chatCss.includes('height: 3.2375rem'));
+    assert.ok(chatCss.includes('font-size: max(.2rem, 15px)'));
+  });
+
   test('6 themes × 6 battle emotes = 36 unique official ids, in wheel order', () => {
     assert.deepEqual(EMOTE_THEMES.map((t) => t.themeId), ENABLED, 'pages follow autoChessData.enabledEmoticonThemeIdList');
     for (const t of EMOTE_THEMES) {
