@@ -173,33 +173,32 @@
 
 /* The always-visible chat is legible on phones and has its own collapse control. */
 .chat-dock { position: absolute; left: .24rem; bottom: 1rem; width: min(4.2rem, 40vw); height: min(2.65rem, 40dvh); box-sizing: border-box; padding: .1rem; background: rgba(9, 20, 15, .78); border: 1px solid rgba(137, 218, 184, .32); border-radius: .06rem; display: flex; flex-direction: column; gap: .06rem; }
-.chat-dock__head { display: flex; align-items: center; justify-content: space-between; gap: .12rem; min-height: .27rem; }
+.chat-dock__head { display: flex; align-items: center; justify-content: flex-end; gap: .12rem; min-height: .27rem; }
 .chat-dock .chat-dock__toggle { flex: 0 0 auto; min-height: 26px; padding: .02rem .1rem; color: var(--mint-400); background: rgba(9, 20, 15, .7); border: 1px solid var(--mint-700); border-radius: .04rem; font-size: max(.13rem, 11px); }
 .chat-dock .echat__form { min-height: 0; flex: 1; gap: .06rem; }
-.chat-dock .echat__heading { font-size: max(.14rem, 12px); }
 .chat-dock .echat__history { flex: 1; height: auto; min-height: 0; }
 .chat-dock .echat__entry { padding: .05rem 0; }
 .chat-dock .echat__meta { font-size: max(.14rem, 12px); }
 .chat-dock .echat__text { font-size: max(.17rem, 14px); }
-.chat-dock .echat__form input { min-height: 32px; height: .38rem; padding: .03rem .08rem; font-size: max(.16rem, 14px); background: rgba(4, 12, 8, .7); padding-right: max(.7rem, 52px); }
-.chat-dock .echat__footer { position: absolute; bottom: .1rem; right: .1rem; }
-.chat-dock .echat__footer > span { display: none; }
-.chat-dock .echat__footer button { min-height: 30px; height: .36rem; min-width: 48px; padding: .02rem .1rem; background: rgba(9, 20, 15, .8); }
+.chat-dock .echat__compose { display: flex; flex: none; align-items: stretch; gap: .06rem; min-width: 0; }
+.chat-dock .echat__form input { flex: 1; min-width: 0; min-height: 28px; height: .32rem; padding: .02rem .06rem; font-size: max(.14rem, 12px); background: rgba(4, 12, 8, .7); }
+.chat-dock .echat__compose button { flex: none; min-height: 28px; height: .32rem; min-width: 26px; padding: .01rem .04rem; color: var(--mint-400); border: 1px solid var(--mint-700); background: rgba(9, 20, 15, .8); font-size: max(.12rem, 10px); }
+.chat-dock .chat-dock__toggle { position: absolute; z-index: 1; top: .06rem; right: .06rem; min-width: 24px; min-height: 20px; height: .24rem; padding: 0 .035rem; font-size: max(.1rem, 8px); line-height: 1; }
 .chat-dock.is-collapsed { width: min(2.7rem, 34vw); height: auto; min-height: .48rem; padding: .06rem .1rem; }
 .chat-dock.is-collapsed .chat-dock__head { min-height: .34rem; }
 @media (max-width: 767px) {
-  /* Align the right edge with the rightmost button in the lower-left mobile rules/control row
-     (.gm__corner in devices.css: three 34px touch controls plus their gaps). The old panel was
-     min(1.85rem, 28dvh) high; 3.2375rem is exactly 1.75× its original rem height. */
+  /* The dock measures to .gm__corner's actual right edge, including optional 作战统计 / 玩法说明 buttons. */
   .chat-dock { left: max(.12rem, env(safe-area-inset-left)); bottom: max(1rem, env(safe-area-inset-bottom));
-    width: calc(.24rem + max(96px, calc(3 * max(.56rem, 34px) + .2rem)) - max(.12rem, env(safe-area-inset-left)));
-    height: 3.2375rem; padding: .1rem; background: rgba(9, 20, 15, .88); }
-  .chat-dock__head { min-height: .36rem; }
-  .chat-dock .echat__heading { font-size: max(.18rem, 14px); }
-  .chat-dock .echat__meta { font-size: max(.16rem, 13px); }
-  .chat-dock .echat__text { font-size: max(.2rem, 15px); line-height: 1.35; }
-  .chat-dock .echat__form input { min-height: 38px; height: .44rem; font-size: max(.2rem, 16px); }
-  .chat-dock .echat__footer button, .chat-dock .chat-dock__toggle { min-height: 34px; font-size: max(.17rem, 13px); }
+    width: var(--chat-dock-width, min(4.2rem, 40vw));
+    height: 3.2375rem; padding: .06rem; background: rgba(9, 20, 15, .88); gap: .03rem; }
+  .chat-dock__head { min-height: 0; height: .24rem; flex: none; }
+  .chat-dock .echat__meta { font-size: max(.13rem, 10px); }
+  .chat-dock .echat__text { font-size: max(.15rem, 11px); line-height: 1.2; }
+  .chat-dock .echat__entry { padding: .025rem 0; }
+  .chat-dock .echat__form { gap: .03rem; }
+  .chat-dock .echat__form input { min-height: 26px; height: .28rem; font-size: max(.14rem, 12px); }
+  .chat-dock .echat__compose button { min-height: 24px; height: .27rem; font-size: max(.12rem, 10px); }
+  .chat-dock .chat-dock__toggle { min-width: 22px; min-height: 18px; height: .22rem; font-size: max(.1rem, 8px); }
   .chat-dock.is-collapsed { width: min(3rem, 48vw); height: auto; min-height: .54rem; }
   .gm:not(.is-collapsed) .chat-dock { bottom: max(1.75rem, calc(env(safe-area-inset-bottom) + 1.25rem)); }
   .gm:not(.is-collapsed) .team--scroll { max-height: min(3.82rem, calc(100% - 6.3rem)); }

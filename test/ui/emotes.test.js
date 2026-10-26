@@ -34,9 +34,12 @@ describe('emote catalog (shared/constants.js)', () => {
     assert.ok(chatUi.includes('collapsed ? null : html`<form id="chat-dock-content"'));
     assert.ok(chatCss.includes('.chat-dock.is-collapsed'));
     assert.ok(chatCss.includes('@media (max-width: 767px)'));
-    assert.ok(chatCss.includes('max(96px, calc(3 * max(.56rem, 34px) + .2rem))'));
+    assert.ok(chatCss.includes('var(--chat-dock-width'));
     assert.ok(chatCss.includes('height: 3.2375rem'));
-    assert.ok(chatCss.includes('font-size: max(.2rem, 15px)'));
+    assert.ok(chatCss.includes('font-size: max(.15rem, 11px)'));
+    assert.ok(chatCss.includes('.chat-dock .echat__compose button'));
+    assert.ok(!chatUi.includes('聊天记录（最近200条）'));
+    assert.ok(chatUi.includes("querySelector('.gm__guide')"));
   });
 
   test('6 themes × 6 battle emotes = 36 unique official ids, in wheel order', () => {

@@ -345,11 +345,27 @@ export function ChatPanel({ onChat, disabled = false, readOnly = false }) {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const history = useStore((s) => s.chatHistory);
+  const dockRef = useRef(null);
   const historyEnd = useRef(null);
   const followHistory = useRef(true);
   useEffect(() => {
     if (followHistory.current) historyEnd.current?.scrollIntoView({ block: 'nearest' });
   }, [history]);
+  useEffect(() => {
+    const dock = dockRef.current;
+    const ruleButton = dock?.closest('.gm')?.querySelector('.gm__guide');
+    if (!dock || !ruleButton) return undefined;
+    const syncRightEdge = () => {
+      const dockRect = dock.getBoundingClientRect();
+      const ruleRect = ruleButton.getBoundingClientRect();
+      dock.style.setProperty('--chat-dock-width', String(Math.max(0, ruleRect.right - dockRect.left)) + 'px');
+    };
+    syncRightEdge();
+    const resize = new ResizeObserver(syncRightEdge);
+    resize.observe(ruleButton);
+    window.addEventListener('resize', syncRightEdge);
+    return () => { resize.disconnect(); window.removeEventListener('resize', syncRightEdge); };
+  }, []);
   const chatAt = useRef(-Infinity);
   const composing = useRef(false);
   const chatBusy = useRef(false);
@@ -367,11 +383,10 @@ export function ChatPanel({ onChat, disabled = false, readOnly = false }) {
       }
     } finally { chatBusy.current = false; setSending(false); }
   };
-  return html`<aside class=${cx('chat-dock', collapsed && 'is-collapsed')} aria-label=${t('聊天记录')}>
+  return html`<aside ref=${dockRef} class=${cx('chat-dock', collapsed && 'is-collapsed')} aria-label=${t('聊天记录')}>
     <div class="chat-dock__head">
-      <div class="echat__heading">${t('聊天记录（最近200条）')}</div>
       <button type="button" class="chat-dock__toggle" aria-expanded=${!collapsed} aria-controls="chat-dock-content"
-        aria-label=${collapsed ? t('展开聊天框') : t('收起聊天框')} onClick=${() => setCollapsed(!collapsed)}>${collapsed ? t('展开聊天框') : t('收起聊天框')}</button>
+        aria-label=${collapsed ? t('展开聊天框') : t('收起聊天框')} onClick=${() => setCollapsed(!collapsed)}>${collapsed ? t('展开') : t('收起')}</button>
     </div>
     ${collapsed ? null : html`<form id="chat-dock-content" class="echat__form" onSubmit=${sendChat}>
         <div class="echat__history" aria-label=${t('聊天记录')} onScroll=${(e) => {
@@ -384,9 +399,9 @@ export function ChatPanel({ onChat, disabled = false, readOnly = false }) {
           </div>`) : html`<div class="echat__empty">${t('暂无聊天记录')}</div>`}
           <div ref=${historyEnd}></div>
         </div>
-        ${readOnly ? null : html`<input value=${draft} maxLength=${CHAT_MAX_LENGTH} aria-label=${t('消息')} onInput=${(e) => setDraft(e.currentTarget.value)}
+        ${readOnly ? null : html`<div class="echat__compose"><input value=${draft} maxLength=${CHAT_MAX_LENGTH} aria-label=${t('消息')} onInput=${(e) => setDraft(e.currentTarget.value)}
           onCompositionStart=${() => { composing.current = true; }} onCompositionEnd=${() => { composing.current = false; }} />
-        <div class="echat__footer"><span>${draft.length}/${CHAT_MAX_LENGTH}</span><button type="submit" disabled=${disabled || sending || !normalizeChat(draft)}>${t('发送')}</button></div>`}
+        <button type="submit" disabled=${disabled || sending || !normalizeChat(draft)}>${t('发送')}</button></div>`}
       </form>`}
   </aside>`;
 }
