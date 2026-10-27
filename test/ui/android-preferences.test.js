@@ -40,3 +40,35 @@ test('Android loadout survives a new WebView origin and remembers resets', () =>
     else globalThis.localStorage = previousStorage;
   }
 });
+
+test('Android voice settings and the manually folded shop survive a new WebView origin', () => {
+  const previousBridge = globalThis.StrongholdAndroid;
+  const previousStorage = globalThis.localStorage;
+  const native = new Map();
+  let originStorage = new Map();
+  globalThis.StrongholdAndroid = {
+    loadPreference: (key) => native.get(key) ?? '',
+    savePreference: (key, raw) => { native.set(key, raw); return true; },
+  };
+  globalThis.localStorage = {
+    getItem: (key) => originStorage.get(key) ?? null,
+    setItem: (key, value) => originStorage.set(key, value),
+  };
+  try {
+    const settings = { voiceLang: 'jp', voiceNative: true };
+    savePref('settings', settings);
+    savePref('shopCollapsed', true);
+    originStorage = new Map(); // the embedded server starts on a new port after process restart
+    assert.deepEqual(loadPref('settings', null), settings);
+    assert.equal(loadPref('shopCollapsed', false), true);
+    savePref('shopCollapsed', false);
+    originStorage = new Map();
+    assert.equal(loadPref('shopCollapsed', true), false, 'unfolding replaces the persisted value');
+    assert.equal(loadPref('sessionOnly', 'fallback'), 'fallback', 'unrelated preferences stay in WebView storage');
+  } finally {
+    if (previousBridge === undefined) delete globalThis.StrongholdAndroid;
+    else globalThis.StrongholdAndroid = previousBridge;
+    if (previousStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previousStorage;
+  }
+});

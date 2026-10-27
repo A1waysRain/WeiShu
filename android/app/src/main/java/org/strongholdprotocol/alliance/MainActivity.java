@@ -573,6 +573,22 @@ public final class MainActivity extends Activity {
                         .edit().putString("match-history", value).commit();
             } catch (org.json.JSONException error) { return false; }
         }
+        @JavascriptInterface public String loadPreference(String key) {
+            if (activeOrigin == null || !activeOrigin.equals(localOrigin()) || !isNativePreferenceKey(key)) return "";
+            return getSharedPreferences("game-preferences", MODE_PRIVATE).getString("pref:" + key, "");
+        }
+        @JavascriptInterface public boolean savePreference(String key, String value) {
+            if (activeOrigin == null || !activeOrigin.equals(localOrigin()) || !isNativePreferenceKey(key)
+                    || value == null || value.length() > 512 * 1024) return false;
+            try {
+                new org.json.JSONTokener(value).nextValue();
+                return getSharedPreferences("game-preferences", MODE_PRIVATE)
+                        .edit().putString("pref:" + key, value).commit();
+            } catch (org.json.JSONException error) { return false; }
+        }
+        private boolean isNativePreferenceKey(String key) {
+            return "settings".equals(key) || "shopCollapsed".equals(key);
+        }
         @JavascriptInterface public String loadStats() {
             if (activeOrigin == null || !activeOrigin.equals(localOrigin())) return "";
             return getSharedPreferences("game-preferences", MODE_PRIVATE).getString("stats", "");

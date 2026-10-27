@@ -127,7 +127,7 @@ import { BandDraftScreen } from './bandDraft.js';
 import { ResultScreen } from './settle.js';
 import { ProtocolBoot, preloadBootArt, bootArtReady, BOOT_LEAVE_MS } from '../ui/protocolBoot.js';
 import { net } from '../net.js';
-import { store, useStore, shallowEqual, serverNow, isSpectating } from '../store.js';
+import { store, useStore, shallowEqual, serverNow, isSpectating, loadPref, savePref } from '../store.js';
 import { battleRunner } from '../battle/runner.js';
 import '../ui/pluginFrame.js';
 import { isClientCombat, observeTarget, teammateProgress, cameraLayers, layerCamera, loneHalf, sidesOf, resumedWatch, followedScout } from '../battle/observe.js';
@@ -222,7 +222,7 @@ function MatchScreen() {
   // every shop / reward card opened by a tap is a new tap — `tap` in the target: two cards of one operator (the pool
   // deals duplicates) carry the same chess id and no piece, and each must say its 选中干员 (detailPanel selectVoiceKey)
   const cardTap = useRef(0);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => loadPref('shopCollapsed', false) === true);
   // GitHub #501: a g.refresh is still waiting for its reply — the shop's 刷新 button dims while it is (gameActions.js
   // single-flights the intent; the R hotkey is dropped by the same guard)
   const [refreshBusy, setRefreshBusy] = useState(false);
@@ -1711,7 +1711,7 @@ function MatchScreen() {
         ${spectator ? null : html`<${Button} size="sm" variant="primary" icon="back" onClick=${() => watchPlayer({ playerId: myId })}>${t('返回自己')}<//>`}
       </div>` : null}
 
-      ${showShop ? html`<${ShopBar} priv=${priv} editable=${editable} collapsed=${barCollapsed} refreshBusy=${refreshBusy} onCollapse=${setCollapsed}
+      ${showShop ? html`<${ShopBar} priv=${priv} editable=${editable} collapsed=${barCollapsed} refreshBusy=${refreshBusy} onCollapse=${(value) => { setCollapsed(value); savePref('shopCollapsed', value); }}
         barRef=${barRef} offBonds=${offBonds}
         onBuy=${buy} onLevel=${() => actions.levelUp()} onRefresh=${() => actions.refresh()} onFreeze=${() => actions.freeze()}
         onDetail=${(id, kind, hint) => setDetail({ kind: kind === 'item' ? 'item' : 'chess', id, hint: hint || null, tap: ++cardTap.current })}

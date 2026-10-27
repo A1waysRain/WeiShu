@@ -171,6 +171,8 @@ export function shallowEqual(a, b) {
 const nativePreferences = {
   loadout: ['loadLoadout', 'saveLoadout'],
   matchHistory: ['loadMatchHistory', 'saveMatchHistory'],
+  settings: ['loadPreference', 'savePreference'],
+  shopCollapsed: ['loadPreference', 'savePreference'],
 };
 
 /**
@@ -184,14 +186,16 @@ export function loadPref(key, fallback) {
   const native = nativePreferences[key];
   if (native) {
     try {
-      const raw = globalThis.StrongholdAndroid?.[native[0]]?.();
+      const raw = globalThis.StrongholdAndroid?.[native[0]]?.(...(native[0] === 'loadPreference' ? [key] : []));
       if (raw) return JSON.parse(raw);
     } catch { /* browser fallback */ }
   }
   try {
     const raw = globalThis.localStorage?.getItem(`sp.pref.${key}`);
     if (native && raw != null) {
-      try { globalThis.StrongholdAndroid?.[native[1]]?.(raw); } catch { /* optional migration */ }
+      try {
+        globalThis.StrongholdAndroid?.[native[1]]?.(...(native[1] === 'savePreference' ? [key, raw] : [raw]));
+      } catch { /* optional migration */ }
     }
     return raw == null ? fallback : JSON.parse(raw);
   } catch {
@@ -209,7 +213,9 @@ export function savePref(key, value) {
   const raw = JSON.stringify(value);
   const native = nativePreferences[key];
   if (native) {
-    try { saved = globalThis.StrongholdAndroid?.[native[1]]?.(raw) === true; } catch { /* browser fallback */ }
+    try {
+      saved = globalThis.StrongholdAndroid?.[native[1]]?.(...(native[1] === 'savePreference' ? [key, raw] : [raw])) === true;
+    } catch { /* browser fallback */ }
   }
   try {
     if (globalThis.localStorage) {
