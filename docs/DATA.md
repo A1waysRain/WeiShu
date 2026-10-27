@@ -500,13 +500,13 @@ Glyph legend (`rows`):
 
 | Field | Example (`boss_5`) | Meaning |
 |---|---|---|
-| `bossId`, `enemyKey`, `handbookId`, `name`, `sortId` | `"boss_5"`, `"enemy_2016_csphtm"`, …, `"卢西恩，“猩红血钻”"`, `5` | `enemyKey` = activity_table `autoChessData.bossInfoDict[*].enemyId`, the official `IsBossEnemy` list: the units 限伤 applies to (one hit ≥ 300000 in a boss battle deals 0; shared/constants.js `BOSS_HIT_LIMIT`, research 11 §2.3) — the wave templates tag exactly these keys `boss` |
+| `bossId`, `enemyKey`, `handbookId`, `name`, `sortId` | `"boss_5"`, `"enemy_2016_csphtm"`, …, `"卢西恩，“猩红血钻”"`, `5` | `enemyKey` = activity_table `autoChessData.bossInfoDict[*].enemyId`, the official `IsBossEnemy` list; wave templates tag exactly these keys `boss`. The remake currently disables the official 300000 hit limit (`BOSS_HIT_LIMIT = 0`; history 0.3.1 §34.35). |
 | `weight`, `hidden` | `10`, `false` | pick weight within its round |
-| `bloodPoint` | `{"FUNNY":200000,"NORMAL":390000,"HARD":780000,"ABYSS":3000000}` | shared leader HP pool per difficulty: bossInfoDict `bloodPoint` / `bloodPointNormal` / `bloodPointHard` / `bloodPointAbyss` of the current data (PRTS 盟约记录's leader table is an older revision: 铳 险境, 胄 / 铳 / 萨米 绝境 differ, no 终极, no 卢西恩); no single hit of ≥ 300000 counts toward it (限伤, `BOSS_HIT_LIMIT`) |
+| `bloodPoint` | `{"FUNNY":200000,"NORMAL":390000,"HARD":780000,"ABYSS":3000000}` | shared leader HP pool per difficulty: bossInfoDict `bloodPoint` / `bloodPointNormal` / `bloodPointHard` / `bloodPointAbyss` of the current data (PRTS 盟约记录's leader table is an older revision: 铳 险境, 胄 / 铳 / 萨米 绝境 differ, no 终极, no 卢西恩). High-damage hits count normally in the current remake (`BOSS_HIT_LIMIT = 0`). |
 | `lpr` | `30` | LP cost if it leaks |
 | `templates[modeId]` | `{"round":14,"template":"act2autochess_h07_05"}` | |
 | `escortsByTemplate[templateId]` | `[{"key":"enemy_2009_csaudc","slot":null,"count":4},…]` | non-boss spawns (slot = still a placeholder) |
-| `parts[]` | `["enemy_9014_acstma","enemy_9015_acstmb"]` | boss parts (random local groups / unharmful); not leaders — 限伤 never applies to them |
+| `parts[]` | `["enemy_9014_acstma","enemy_9015_acstmb"]` | boss parts (random local groups / unharmful); not leaders |
 | `abilities[]` | handbook texts | |
 
 ## 14. `tokens.json` — `{ [tokenId]: Token }` (22)

@@ -500,7 +500,7 @@ recorded for the player whose half contains the goal it reached, with `sourcePla
   leaks, cap 10; boss rounds use `lpr`). `perfect = no counted leak`.
 - `battleEnd {result}` fires before the result is frozen: handlers may still call `addLayers`/`addCoins`.
 - `layerGains` holds what `addLayers` actually added — never more than a bond's room under `BOND_LAYER_CAP` (999) from
-  its starting layers; `bossDamage` / `damageDealt` never include a leader hit cancelled by 限伤 (§4).
+  its starting layers; leader damage includes high-damage hits because the project's official boss-hit limit is disabled (§4).
 - `damageDealt` and `unitStats[].dmg` count only HP removed from the other side: a unit's own drain or 流失 (源石溶剂,
   史尔特尔 S3 …) and friendly damage (the drain on 炎佑) count as the target's `taken`, never as damage dealt; the kill
   credit is unchanged (`damage.js applyHpLoss`).
@@ -839,12 +839,10 @@ PRTS 异常效果: 无法选择 effects "仅在选择时生效"); checked before
 `max(A − max(0, D×(1−defIgnorePct) − defIgnoreFlat), 5 %A)`, arts `max(A×(1 − R′/100), 5 %A)`, elemental
 `max(A×(1 − 元素抗性/100), 5 %A)`, true = A; source ignore mods are added) → × source `dmgDealtMul` (× phys/artsDealtMul)
 × target `dmgTakenMul` (not for elemental) × type-taken mul × `dmg.mul` (a `sourceless` hit skips every source term) →
-**限伤** (`leaderHitCancelled`: on a leader — `isBoss`, the tag-'boss' units: data/bosses.json `enemyKey`, the official
-`IsBossEnemy` list, and their mirrored copies; never parts, escorts, drones — in a `'boss'` / `'hidden'` battle, a hit
-with `ceil(final) ≥ BOSS_HIT_LIMIT` (300000, shared/constants.js) is cancelled whole: returns 0 before shields (阿利斯泰尔's
-`boss:vest` barrier stays untouched; a `hit`-step block such as 假想敌：再生's aura acts earlier) [ASSUMED order], no HP /
-pool loss, no credit or stats, no `dmg` event, no `damaged` / `fatal` / kill; an fx `hitCap` `{ id, n }` marks it and
-draws nothing; research 11) → shields (a typed one — buff `shieldType` — only for its damage type) → **`hpDamage`** (what
+**Boss-hit limit status**: the client has an official 300000 leader-hit limit (research 11), but this project disables it
+(`shared/constants.js BOSS_HIT_LIMIT = 0`, history 0.3.1 §34.35). `leaderHitCancelled` therefore returns false and large
+hits continue into shields, HP and the shared boss pool; `hitCap` remains a recognized legacy FX kind but is not emitted
+by damage processing. → shields (a typed one — buff `shieldType` — only for its damage type) → **`hpDamage`** (what
 passed the shields; a handler may only lower `amount` — the 伤判效果 that act after a barrier: 煌's 紧急除颤 HP floor, PRTS
 备注 "该伤害减少(伤害值-煌当前生命值+煌最大生命值×50%)点"; 左乐's 庇护 re-applied after his 行险 barrier; never for a 流失) → HP loss
 (boss units: routed to `sharedBoss.damage(playerId, amount)`; a pool left under 1 HP is emptied) → if HP ≤ 0: **`fatal`** (`ctx.prevented = true` keeps the
@@ -883,11 +881,8 @@ not `'dot'` [ASSUMED] (DESIGN §22.4). The 源石溶剂 drain also ticks on ever
 partner's too: PRTS 备注 "全场范围内的所有敌人类我方单位也会获得此装备的…效果…无视目标可选性"), credited to nobody, once per
 second however many carriers (PRTS 作战机制 "同名buff的默认叠加策略buff只能表现出一个"), while a carrier is on the field
 [ASSUMED]. 奥术法阵 has the same 备注 for its rider: while a carrier is on the field, every damage instance of such a unit
-silences its target for the item's 5 s ("造成伤害时使目标失去特殊能力5秒"; since 0.1.1). On a leader
-in a boss / hidden battle a loss of ≥ `BOSS_HIT_LIMIT` (a part's 传递) is cancelled like a hit; 胄's drone link — 2 % of the
-pool, a share that is no hit — passes it (`loseHp` `noHitLimit`, DESIGN §25.13.4 [ASSUMED]). Every HP-damage kind
-meets the limit (phys / arts / true / 元素伤害 incl. element bursts, DoT ticks); element 损伤 (the gauge, `type: 'element'`)
-removes no HP and never does.
+silences its target for the item's 5 s ("造成伤害时使目标失去特殊能力5秒"; since 0.1.1). Boss HP loss, including
+damage passed through `loseHp`, is uncapped while `BOSS_HIT_LIMIT = 0`.
 
 ---
 
@@ -1493,8 +1488,7 @@ Unknown subprofessions fall back to the profession default (test `professions.te
   kind, e.g. `mortar` for 帝国炮火先兆者, which the renderer does not draw — its fx `bombardShell` is the shell), `['dmg', tgt,
   amount, type]` (`phys|arts|true|burn|neural|necrosis|apoptosis`), `['heal', tgt, amount]`, `['skill', id, 1|0]`,
   `['engage', id]` (an ally's first attack that hits an enemy — the client's 行动开始 voice, DESIGN §21.30), `['die', id,
-  reason]`, `['leak', id]`, `['status', id, key, 1|0]`, `['fx', kind, x, y, extra]` (`hitCap` `{ id, n }`: a leader's
-  hit cancelled by 限伤 — the renderer draws nothing; `extra.form` = the unit's model form from then on — an enemy's
+  reason]`, `['leak', id]`, `['status', id, key, 1|0]`, `['fx', kind, x, y, extra]` (`hitCap` `{ id, n }`: legacy event for a cancelled leader hit; not emitted while the project limit is disabled; `extra.form` = the unit's model form from then on — an enemy's
   `content/enemies/helpers.js setForm`, a 傀儡师's 替身 — `shared/protocol.js fxForm`), `['layer', playerId, bondId, n]` (n =
   the layers actually added, capped at 999), `['bounty', playerId, coins]`, `['cast', id, slot, dur?]` (display only,
   0.3.0: an enemy uses the skill of index `slot` of its data record's `skills[]` — data/enemies.json, the order the

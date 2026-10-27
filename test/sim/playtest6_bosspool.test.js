@@ -139,7 +139,7 @@ for (const bossId of BOSSES) {
     const pool = new SharedBossPool(max);
     const { b } = bossBattle(bossId, pool);
     const leader = b.enemies.find((e) => e.alive && e.isBoss);
-    // the team already dealt all but 250000 (one hit of the whole pool would be cancelled by 限伤, BOSS_HIT_LIMIT 300000)
+    // the team already dealt all but 250000; the final oversized hit must still drain the remaining pool.
     const rest = 250000;
     pool.damage('p_1', max - rest);
     const dealt = b.dealDamage(null, leader, { amount: 1e9, type: 'true', mul: (rest - 0.4) / 1e9 });

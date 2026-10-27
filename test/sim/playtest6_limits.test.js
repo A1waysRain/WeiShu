@@ -25,9 +25,9 @@ import { abOf } from '../../server/sim/content/enemies.js';
 const DATA = getData({ log: { warn() {}, error() {}, info() {} } });
 const LIMIT = BOSS_HIT_LIMIT;
 
-test('switches: BOND_LAYER_CAP = 999 (MAX_GARRISON_STACK), BOSS_HIT_LIMIT = 300000 (MAX_BATTLE_DAMAGE)', () => {
+test('switches: BOND_LAYER_CAP = 999 (MAX_GARRISON_STACK), boss-hit limit disabled', () => {
   assert.equal(BOND_LAYER_CAP, 999);
-  assert.equal(BOSS_HIT_LIMIT, 300000);
+  assert.equal(BOSS_HIT_LIMIT, 0);
 });
 
 test('layerGainRoom: min(n, 999 − before), never negative, never lowers a count; +Infinity = the room left', () => {
@@ -104,7 +104,7 @@ test('layer gains stay disabled in boss / 联防 fields (unchanged)', () => {
 });
 
 // ---------------------------------------------------------------------------------------------------------------
-// 限伤: the boss-hit limit
+// The project's boss-hit limit is disabled; keep the old official-rule suite available when explicitly re-enabled.
 
 const guardRec = () => chessRec({ id: 't_guard', profession: 'WARRIOR', stats: { atk: 10, maxHp: 1e9 }, skill: null });
 /** A field of `kind` with a leader (tag 'boss'), a minion and a part, all standing still; the shared pool when given. */
@@ -132,6 +132,21 @@ function hitField({ kind = 'boss', pool = null, leaderDef = 0, leaderRes = 0 } =
   return { h, b: h.b, leader, mini: h.enemy('enemy_mini'), part: h.enemy('enemy_part'), op };
 }
 const capEvents = (h) => h.eventsOf('fx').filter((e) => e[1] === 'hitCap');
+
+test('boss hits at and above 300000 land in boss and hidden battles without hitCap events', () => {
+  for (const kind of ['boss', 'hidden']) {
+    const pool = new SharedBossPool(5e6);
+    const { h, b, leader, op } = hitField({ kind, pool });
+    assert.equal(leaderHitCancelled(b, leader, 300000), false);
+    assert.equal(b.dealDamage(op, leader, { amount: 300000, type: 'true' }), 300000);
+    assert.equal(b.dealDamage(op, leader, { amount: 500000, type: 'true' }), 500000);
+    assert.equal(pool.hp, 4200000, `${kind}: both hits reduce shared pool`);
+    assert.equal(pool.byPlayer.get('P'), 800000);
+    assert.equal(capEvents(h).length, 0);
+  }
+});
+
+if (BOSS_HIT_LIMIT > 0) {
 
 test('限伤: a leader\'s hit of 299999 lands, 300000 deals 0 — nothing credited to the shared pool, no number, a hitCap event', () => {
   const pool = new SharedBossPool(5e6);
@@ -461,3 +476,4 @@ test('docs: research 11 is indexed; SIM / META / DATA / PLAYING / BALANCE state 
   assert.match(PLAYING, /300000/);
   assert.match(doc('docs/BALANCE.md'), /限伤 300000/);
 });
+}

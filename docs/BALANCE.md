@@ -403,11 +403,11 @@ heuristics CPU 36 / 88 → 35 / 86 ms and 16 / 40 → 16 / 40 ms.
 
 ---
 
-## 7. Official limits: 999 layers per bond, 限伤 300000 (research 11, DESIGN §20.12)
+## 7. Official 999-layer cap and the disabled boss-hit limit (research 11, DESIGN §20.12)
 
-Two official caps, now in the sim and the match (`shared/constants.js BOND_LAYER_CAP` / `BOSS_HIT_LIMIT`, 0 / Infinity =
-off): a bond's layers stop at 999 (`MAX_GARRISON_STACK`); in the Final Assault / Hidden Core a single hit of ≥ 300000
-on a leader is cancelled (`MAX_BATTLE_DAMAGE`: 0 damage, nothing to the pool — not a clamp).
+The 999-layer cap remains active (`shared/constants.js BOND_LAYER_CAP`). The official 300000 boss-hit limit documented
+below is historical analysis only; the current remake disables it (`BOSS_HIT_LIMIT = 0`, history 0.3.1 §34.35), so
+leader hits of any size count toward the shared pool.
 
 - **Effect on the measurements above: none.** The competent board of §1.1 carries ≈ 150 core layers at R14, far below
   999, and its biggest leader hits stay far under the line — probe of 2026-10-01 (`runBoss` with every leader hit

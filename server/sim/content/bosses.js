@@ -20,7 +20,7 @@
 //   boss_1/8 假想敌：胄      random arts beam (range 8); 灭顶之灾 one 刺胄之弹 at the highest-ATK operator in range (8-hit
 //                            flying shell, 3×3 stun + phys DoT on arrival); <20 %: damage ×0.5 (no extra shell: PRTS
 //                            能力修正); 死亡集群 drones — a drone that dies costs the leader 2 % of its max HP = the shared
-//                            pool's (DRONE_LINK_BASE, [ASSUMED] reading), past 限伤 (a share, no hit). boss_8 adds 斩胄之剑 /
+//                            pool's (DRONE_LINK_BASE, [ASSUMED] reading). boss_8 adds 斩胄之剑 /
 //                            破胄之锤.
 //   斩胄之剑 / 破胄之锤      初始模式: hover invulnerable next to 胄, AoE attacks (锤 150 % ATK). 出击模式: blink to the
 //                            level's blink route, fly at the lowest-ATK operator (3×3 stun + DoT); 15 hits shoot it
@@ -89,8 +89,8 @@ import { hypot, powi } from '../detmath.js';
  * 剑/锤 only takes damage outside its invulnerable 初始模式 (its 出击模式 dive and 【瘫痪】). The two official texts
  * disagree on the dive: the PRTS talent says "受到伤害时" (any damage), the in-game handbook (data/enemies.json abilities,
  * PRTS 能力) "被击落时受到伤害以一定比例传递" (only once shot down) — the dive hits passing on is [ASSUMED] (the talent
- * text; ≤ 15 hits per dive). A loss passed on to a leader is one hit for 限伤 (sim/damage.js leaderHitCancelled, via
- * Battle.loseHp). v2.5: 0.5 [ASSUMED], and a 剑/锤 passed damage on only while grounded (DESIGN §20.10, §20.13).
+ * text; ≤ 15 hits per dive). A loss passed on to a leader uses Battle.loseHp; it is currently uncapped like other leader
+ * damage. v2.5: 0.5 [ASSUMED], and a 剑/锤 passed damage on only while grounded (DESIGN §20.10, §20.13).
  */
 export const PART_TRANSFER = 1;
 /** The 斩胄之剑 / 破胄之锤 share — the same PRTS 等量 as PART_TRANSFER (kept as a name for the blade kit and its tests). */
@@ -113,7 +113,7 @@ const BLADE_HAND = Object.freeze({ enemy_9014_acstma: 'left_hand', enemy_9015_ac
  *   'unit': the in-battle unit's data max HP (600 000 / hidden 1 200 000, 不死) — 12 000 / 24 000 per drone at every
  *          difficulty: 0.33 % of the 终极 bar but 19 % of the solo 标准 bar (61 875), so drones decide solo fights.
  * Round 2 of the boss-HP review tried 'unit'; the review measured the solo regression, so the default is back to 'pool'.
- * 限伤 (shared/constants.js BOSS_HIT_LIMIT): the share is no hit and passes the limit (Battle.loseHp `noHitLimit`).
+ * This pool share is applied through Battle.loseHp `noHitLimit`; the official boss-hit limit is disabled in the remake.
  * Since the pool counts every player alive at the fight's start (DESIGN §25.13.4, the owner's decision of 2026-10-06),
  * the hidden 胄 终极 pool reaches 21 600 000 / 28 800 000 with 3 / 4 players — a drone 432 000 / 576 000, which the
  * limit (ceil ≥ 300000) would cancel, so drones would stop counting exactly in the largest fights. [ASSUMED]: the

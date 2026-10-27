@@ -763,13 +763,9 @@ Any `choice:` handler whose EffectRef reuses its own key must guard like this (o
   on until the overtime drain. The first end condition the server registers decides (`Match._finalEnding`): pool 0 →
   victory, team LP 0 → defeat (PRTS 卫戍协议：盟约 下半 "…使目标生命值扣除至0，则无视倒计时直接失败"); after a forced end
   no report (an in-flight `b.progress`, the final `b.result` with its rounded per-player damage) credits the pool.
-  **限伤** (research 11 §2; client `AutoChessStepModeManager._OnBossEnemyTakeDamage`): in both boss rounds a single hit
-  on a leader with ceil(damage) ≥ `BOSS_HIT_LIMIT` = 300000 (shared/constants.js; 0 / Infinity = off) is cancelled in the
-  sim (`sim/damage.js leaderHitCancelled`, SIM.md §4) — it deals 0 and nothing reaches the shared pool, the per-player
-  boss damage or the BOSS_HIT tickers; minions, parts, normal rounds and 联防 are unaffected. 胄's drone link (2 % of the
-  pool when a drone dies) is a share, no hit, and passes the limit (`Battle.loseHp noHitLimit`; with the per-player pool
-  a hidden 胄 终极 drone is 432 000 / 576 000 at 3 / 4 players [ASSUMED], §25.13.4). The server's own runs, the browsers'
-  runs and the server's verification share the rule, so digests agree.
+  The official 300000 boss-hit limit (research 11 §2) is disabled in this project by `BOSS_HIT_LIMIT = 0` (history
+  0.3.1 §34.35). High-damage leader hits and HP losses now reduce the shared pool normally; server and browser sims
+  use the same setting.
 
 ### 3.1 Balance layer (data/tuning.json)
 `data/config.json` is generated and stays research-faithful. There is **no custom balance** any more (DESIGN §14
@@ -966,7 +962,7 @@ round was over. The official 1 s `broadcastBeginDelay` is not modelled.
 * Boss-round `local` pack spawns (boss parts) all spawn; content scripts (bosses.js) decide their behaviour.
 * The Final Assault ends as a defeat when every field finished with the boss pool above 0 (boss escaped).
 * The 999 layer cap holds for every prep-side gain too (the client only shows the in-battle clamp; the scene server's
-  code is not in the client — research 11 §1.2). A 限伤-cancelled hit shows no number; a part's damage passed on to its
+  code is not in the client — research 11 §1.2). The legacy hitCap event shows no number (the disabled current rule emits none); a part's damage passed on to its
   leader (Battle.loseHp) meets the limit like a hit (research 11 §2.3).
 * Combat limits are real seconds (× 2 in game seconds) — see §3; research 00-INDEX §8 #10 assumed game seconds.
 * Emotes faster than 1/s answer `RATE`.

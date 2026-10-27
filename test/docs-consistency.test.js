@@ -579,12 +579,12 @@ test('playtest6b follow-up (DESIGN §20.10–§20.13): leader HP, 直接乘算, 
   }
   for (const [name, src] of [['Match', matchText()], ['PlayerState', playerText()]]) assert.ok(!/layerRoom\b/.test(src), `${name}: no layerRoom`);
   // 限伤: official constant, not an overflow — no doc keeps the boss-HP branch's "fixed-point overflow, not modelled"
-  assert.equal(BOSS_HIT_LIMIT, 300000);
+  assert.equal(BOSS_HIT_LIMIT, 0, 'the official limit is disabled by the current project decision');
   for (const [name, text] of [['BALANCE', BALANCE], ['DATA', DATA_MD], ['PLAYING', PLAYING], ['SIM', SIM], ['META', META], ['research 02', R02], ['DESIGN', DESIGN]]) {
     assert.ok(!/reads as the engine's fixed-point overflow|is \[inference\] and is not modelled|Not modelled: the largest damage/.test(text), `${name}: 限伤 is not called an unmodelled overflow`);
     assert.ok(!/BOND_LAYER_CAP`?\)? ?\[ASSUMED\]|999 \[ASSUMED\]|awaiting the user's confirmation/.test(text), `${name}: the 999 cap is official, not [ASSUMED]`);
   }
-  assert.match(BALANCE, /superseded by that binary evidence/);
+  assert.match(BALANCE, /current remake disables it/);
   assert.match(R11, /MAX_BATTLE_DAMAGE = 300000/);
   assert.match(R02, /MAX_GARRISON_STACK = 999/);
   // §20.9: elite settled, 999 / 限伤 official with their flips, the fixed leader pool settled then — replaced on 2026-10-06
@@ -606,7 +606,7 @@ test('playtest6b follow-up (DESIGN §20.10–§20.13): leader HP, 直接乘算, 
   const s63 = DESIGN.slice(DESIGN.indexOf('### 6.3'), DESIGN.indexOf('### 6.4'));
   assert.match(s52, /are 直接乘算 and go into `Σpct`/);
   assert.match(s53, /`Battle\.applyStrongest`/);
-  assert.match(s55, /\*\*限伤\*\*[^\n]*`ceil\(final\) ≥ 300000` is cancelled[^\n]*before HP shields/);
+  assert.match(doc('docs/design/engine.md'), /official 300000 boss-hit limit is \*\*disabled by project decision\*\*/);
   assert.match(s62, /elite onto the consumed deployed copy's tile, else to the hand \(§20\.11\)/);
   assert.ok(!/A merge's elite always goes to the hand/.test(DESIGN), '§6.2: the hand-first wording is gone');
   assert.match(s63, /`BOND_LAYER_CAP` = 999 layers \(the client's `MAX_GARRISON_STACK`/);

@@ -2597,9 +2597,9 @@ test('假想敌：胄 死亡集群: the 2 % reads the leader\'s shown max HP (th
   assert.equal(droneLinkBase(hb, 'unit'), 1200000);
 });
 
-test('假想敌：胄 (隐秘核心) 死亡集群 past 限伤: with 3 / 4 players alive the drone share (432 000 / 576 000) still lands — a share, no hit (DESIGN §25.13.4)', () => {
+test('假想敌：胄 (隐秘核心) 死亡集群 and direct hits over 300000 both reduce the shared pool', () => {
   // the pool counts every player alive at the fight's start (the owner's decision of 2026-10-06, PR #209): hidden 胄 终极
-  // 7 200 000 × 3 / × 4 — 2 % is ≥ BOSS_HIT_LIMIT (300000), which cancels a hit; the drone link is no hit
+  // 7 200 000 × 3 / × 4 — 2 % is ≥ 300000; both this link and direct hits land under the current project rule.
   for (const [n, loss] of [[3, 432000], [4, 576000]]) {
     const h = bossArena({ kind: 'hidden', hp: 7200000 * n, units: [{ chessId: 't_gun', row: 12, col: 3 }], setup: setTpl('act1autochess_h08_01') });
     h.step();
@@ -2612,11 +2612,11 @@ test('假想敌：胄 (隐秘核心) 死亡集群 past 限伤: with 3 / 4 player
     h.b.kill(d, h.unit('t_gun'));
     approx(before - h.b.sharedBoss.hp, loss, 1e-6, `${n} players: 2 % of ${7200000 * n}`);
     assert.ok(!h.eventsOf('fx').some((f) => f[1] === 'hitCap'), `${n} players: not cancelled`);
-    // a hit of the same size is still cancelled (限伤)
+    // The project disables the official boss-hit limit, so an equal direct hit also lands.
     const hp = h.b.sharedBoss.hp;
     h.b.dealDamage(h.unit('t_gun'), boss, { amount: loss, type: 'true', canDodge: false });
-    assert.equal(h.b.sharedBoss.hp, hp, `${n} players: a ${loss} hit is cancelled`);
-    assert.ok(h.eventsOf('fx').some((f) => f[1] === 'hitCap'));
+    assert.equal(h.b.sharedBoss.hp, hp - loss, `${n} players: a ${loss} direct hit lands`);
+    assert.ok(!h.eventsOf('fx').some((f) => f[1] === 'hitCap'));
   }
 });
 

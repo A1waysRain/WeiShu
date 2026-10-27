@@ -1,6 +1,6 @@
 // Official limits on the match side (docs/research/11-limits-official.md): bond layers stop at 999 per bond
 // (shared/constants.js BOND_LAYER_CAP: PlayerState.addLayers, the settle of the in-battle gains, the client-result
-// check, the invariants) and the boss-hit limit 限伤 (BOSS_HIT_LIMIT 300000) in a real Final Assault / Hidden Core with a
+// check, the invariants) and the project's disabled boss-hit limit in a real Final Assault / Hidden Core with a
 // 999-layer board.
 
 import { test } from 'node:test';
@@ -116,9 +116,7 @@ test('invariants: a bond above 999 is a violation (no writer may pass the cap)',
 // ---- a real Final Assault (and Hidden Core) with a 999-layer board ----------------------------------------------
 
 const YAN = ['chess_char_6_15_a', 'chess_char_5_12_a', 'chess_char_4_17_a', 'chess_char_3_03_a'];
-/** Every enemy takes ×K damage — a stand-in for the 999-layer debuffs of a real board (谢拉格 ×11.34 vs cold / frozen,
- * 奥术 ×11.19 arts taken): with 炎 at 999 (ATK ×10.22) the hits land far past 300000. Once `relentAfter` leader hits
- * were cancelled the leaders lose the stand-in so the fight can finish. */
+/** Every enemy takes ×K damage as a stand-in for the 999-layer debuffs of a real board. */
 const K = 2000;
 function limitBattleClass(log, relentAfter = 6) {
   return class extends Battle {
@@ -155,7 +153,7 @@ function limitBattleClass(log, relentAfter = 6) {
   };
 }
 
-test('Final Assault + Hidden Core with a 999-layer 炎 board (real sim, server-run): every leader hit of ≥ 300000 deals 0 and nothing of it reaches the pool; the hits under the line win', () => {
+test('Final Assault + Hidden Core with a 999-layer 炎 board (real sim, server-run): hits over 300000 land and clear the pools', () => {
   const h = makeMatch({ mode: 'solo', difficulty: 'HARD', seed: 76, fake: true, captureFrames: false, script: (b) => (b.kind === 'normal' ? { duration: 1 } : {}) });
   const m = h.m;
   m.bossId = 'boss_6';       // 阿利斯泰尔 walks into the board
@@ -193,11 +191,9 @@ test('Final Assault + Hidden Core with a 999-layer 炎 board (real sim, server-r
   const op = fa.battle.allyUnits.find((u) => u.kind === 'op' && u.defId === YAN[0]);
   assert.ok(op, 'the operator fought');
   for (const rec of log) {
-    assert.ok(rec.caps.length > 0, `${rec.kind}: hits past the line were cancelled (${rec.caps.length})`);
-    assert.ok(rec.caps.every((n) => n >= BOSS_HIT_LIMIT));
-    assert.ok(rec.leaderHits.every((a) => Math.ceil(a) < BOSS_HIT_LIMIT), `${rec.kind}: no leader hit of ≥ 300000 landed (max ${Math.max(0, ...rec.leaderHits)})`);
-    assert.ok(rec.credits.every((a) => a < BOSS_HIT_LIMIT), `${rec.kind}: nothing ≥ 300000 reached the shared pool`);
-    assert.ok(rec.leaderHits.length > 0, `${rec.kind}: hits under the line landed`);
+    assert.deepEqual(rec.caps, [], `${rec.kind}: no hit is cancelled`);
+    assert.ok(rec.leaderHits.some((a) => a >= 300000), `${rec.kind}: a ≥ 300000 leader hit lands`);
+    assert.ok(rec.credits.some((a) => a > 0), `${rec.kind}: damage reaches the shared pool`);
     assert.equal(rec.battle.sharedBoss.hp, 0, `${rec.kind}: the pool was emptied by those`);
     assert.equal(rec.battle.reason, 'cleared');
   }
